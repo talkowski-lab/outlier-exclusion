@@ -1,0 +1,10 @@
+version: 1.2
+workflows:
+  - name: OutlierExclusion
+    subclass: WDL
+    primaryDescriptorPath: /wdl/OutlierExclusion.wdl
+    filters:
+      branches:
+        - main
+      tags:
+        - /.*/
