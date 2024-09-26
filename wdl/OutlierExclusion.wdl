@@ -25,7 +25,7 @@ workflow OutlierExclusion {
     Float min_wgd_score
     Float max_wgd_score
     Int iqr_multiplier
-    
+    String pandas_docker
 
     String filter_name
     String bcftools_filter
@@ -69,22 +69,40 @@ workflow OutlierExclusion {
     Int machine_mem_mb
   }
 
- 
-  call JoinRawCalls_sv_counts {
+  call MakeJoinedRawCallsDB {
     input:
-      cohort_prefix = cohort_prefix,
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
-      disk_size_gb = disk_size_gb,
-
-      min_svsize = min_svsize,
-      max_svsize = max_svsize
-      svtype = svtype,
-      docker = docker,
-      machine_mem_mb = machine_mem_mb
+      make_tables_sql = make_tables_sql,
+      duckdb_zip = duckdb_zip,
+      runtime_docker = bcftools_docker
   }
-     call Determine_outlier_samples {
-         input:
+
+  call CountSVsPerGenome {
+    input:
+      svtype = countsvs_svtype,
+      min_svlen = countsvs_min_svlen,
+      max_svlen = countsvs_max_svlen
+      MakeJoinedRawCallsDB.joined_raw_calls_db,
+      templater_awk = templater_awk,
+      count_svs_sql_tmpl = count_svs_sql_tmpl,
+      duckdb_zip = duckdb_zip,
+      runtime_docker = linux_docker
+  }
+
+  call DetermineOutlierSamples {
+    input:
+      cohort_prefix = cohort_prefix,
+      sv_counts_per_genome_all = sv_counts_per_genome_all,
+      sv_counts_per_genome_filtered = sv_counts_per_genome_filtered,
+      wgd_scores = wgd_scores,
+      min_wgd_score = min_wgd_score,
+      max_wgd_score = max_wgd_score,
+      iqr_multiplier = iqr_multiplier,
+      determine_outlier_samples_script = determine_outlier_samples_script,
+      runtime_docker = pandas_docker
+  }
+
             cohort_prefix = cohort_prefix,
             determine_outlier_samples_script = determine_outlier_samples_script,
             join_raw_calls_sv_counts = JoinRawCalls_sv_counts.join_raw_calls_sv_counts,
