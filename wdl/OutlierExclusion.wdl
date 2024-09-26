@@ -18,7 +18,15 @@ workflow OutlierExclusion {
     File count_svs_sql_tmpl
     String linux_docker
 
+    # DetermineOutlierSamples -------------------------------------------------
     String cohort_prefix
+    File wgd_scores
+    File determine_outlier_samples_script
+    Float min_wgd_score
+    Float max_wgd_score
+    Int iqr_multiplier
+    
+
     String filter_name
     String bcftools_filter
 
@@ -207,14 +215,14 @@ task MakeJoinedRawCallsDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(join_raw_calls_vcf, "GB") * 5.0)
+  Int disk_size_gb = ceil(size(join_raw_calls_vcf, 'GB') * 5.0)
 
   runtime {
-    memory: "2 GB",
-    disks: "local-disk ${disk_size_gb} HDD",
-    cpus: 1,
-    preemptible: 3,
-    maxRetries: 1,
+    memory: '2 GB'
+    disks: 'local-disk ${disk_size_gb} HDD'
+    cpus: 1
+    preemptible: 3
+    maxRetries: 1
     docker: runtime_docker
     bootDiskSizeGb: 16
   }
@@ -266,14 +274,14 @@ task CountSVsPerGenome {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(joined_raw_calls_db, "GB") + 8.0)
+  Int disk_size_gb = ceil(size(joined_raw_calls_db, 'GB') + 8.0)
 
   runtime {
-    memory: "4 GB",
-    disks: "local-disk ${disk_size_gb} HDD",
-    cpus: 1,
-    preemptible: 3,
-    maxRetries: 0,
+    memory: '4 GB'
+    disks: 'local-disk ${disk_size_gb} HDD'
+    cpus: 1
+    preemptible: 3
+    maxRetries: 0
     docker: runtime_docker
     bootDiskSizeGb: 16
   }
@@ -295,108 +303,55 @@ task CountSVsPerGenome {
   >>>
 
   output {
-    File svcounts_per_genome_all = 'joined_raw_calls_svcounts_ALL.tsv'
-    File svcounts_per_genome_filtered = 'joined_raw_calls_svcount_~{svtype}.tsv'
+    File sv_counts_per_genome_all = 'joined_raw_calls_svcounts_ALL.tsv'
+    File sv_counts_per_genome_filtered = 'joined_raw_calls_svcount_~{svtype}.tsv'
   }
 }
 
-
-task JoinRawCalls_sv_counts {
+task DetermineOutlierSamples {
   input {
     String cohort_prefix
-    File joined_raw_calls_vcf
-    File joined_raw_calls_vcf_index
-    Int disk_size_gb
-    Int min_svsize
-    Int max_svsize
-    String svtype
-    String docker
-    Int machine_mem_mb
+    File sv_counts_per_genome_all
+    File sv_counts_per_genome_filtered
+    File wgd_scores
+    Float min_wgd_score
+    Float max_wgd_score
+    Int iqr_multiplier
+
+    File determine_outlier_samples_script
+
+    String runtime_docker
   }
+
+  Float input_size = size([sv_counts_per_genome_all, sv_counts_per_genome_filtered, wgd_scores], 'GB')
+  Int mem_gb = ceil(input_size * 1.2)
 
   command <<<
     set -euo pipefail
 
-    bcftools query \
-      --include 'GT ~ "1" & (INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS")' \
-      --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
-      '~{joined_raw_calls_vcf}' > join_raw_calls_svlens.tsv
+    python3 '~{determine_outlier_samples_script}' \
+      -s '~{sv_counts_per_genome}' \
+      -r '~{sv_counts_per_genome_filtered}'
+      -i ~{iqr_multiplier} \
+      -w '~{wgd_scores}' \
+      -l '~{wgd_lower_cutoff}' \
+      -hi '~{wgd_higher_cutoff}' \
+      -o '~{cohort_prefix}_outlier_sample_list.txt'
+  >>>
 
-    bcftools query \
-      --include 'GT ~ "1" & (INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS")' \
-      --format '%ID\t%INFO/MEMBERS\n' \
-      '~{join_raw_calls_vcf}' \
-      | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      > join_raw_calls_vids.tsv
+  runtime {
+    memory: '~{mem_gb} GB'
+    cpu: 1
+    bootDiskSizeGb: 15
+    disks: 'local-disk ' + ceil(input_size * 1.3) + ' HDD'
+    preemptible: 1
+    maxRetries: 1
+    docker: runtime_docker
+  }
 
- 
-        svtk vcf2bed --include-filters -i ALL ~{join_raw_calls_vcf} ~{cohort_prefix}.join_raw_calls.bed
-        awk -F'\t' '{
-            split($6, samples, ",");
-            svtype=$5;
-            if (svtype == "INS" || svtype ~ /^INS:ME/)
-                svtype="INS";
-            else if (svtype != "DEL" && svtype != "DUP" && svtype != "INV")
-                svtype="BND";
-            for (i in samples)
-                print samples[i] "\t" svtype;
-        }' ~{cohort_prefix}.join_raw_calls.bed | sort | uniq -c | awk "{print \$2 \"\t\" \$3 \"\t\" \$1}" > ~{cohort_prefix}_svtype_counts.txt
-
-        awk -F'\t' -v svtype="~{svtype}" -v lower="~{joinrawcalls_sv_counts_size_range_lower_cutoff}" -v upper="~{joinrawcalls_sv_counts_size_range_higher_cutoff}" \
-        '$5 == svtype && ($3 - $2) >= lower && ($3 - $2) <= upper {print $6}' ~{cohort_prefix}.join_raw_calls.bed | \
-        tr "," "\n" | grep -v '^$' | sort | uniq -c | sort -nr | awk '{print $1 "\t" $2}' > ~{cohort_prefix}_specific_size_range_counts.txt
-
-    >>>
-
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
-
-    output {
-        File join_raw_calls_bed = "~{cohort_prefix}.join_raw_calls.bed"
-        File join_raw_calls_sv_counts = "~{cohort_prefix}_svtype_counts.txt"
-        File join_raw_calls_sv_counts_specific_size_range = "~{cohort_prefix}_specific_size_range_counts.txt"
-    }
-}
-
-task Determine_outlier_samples {
-    input {
-        String cohort_prefix
-        File determine_outlier_samples_script
-        File join_raw_calls_sv_counts
-        File join_raw_calls_sv_counts_specific_size_range
-        File wgd_score_file
-        Float wgd_lower_cutoff
-        Float wgd_higher_cutoff
-        Int iqr_multiplier
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
-
-    command <<<
-        set -euo pipefail
-
-        python3 ~{determine_outlier_samples_script} -s ~{join_raw_calls_sv_counts} -r ~{join_raw_calls_sv_counts_specific_size_range} -i ~{iqr_multiplier} -w ~{wgd_score_file} -l ~{wgd_lower_cutoff} -hi ~{wgd_higher_cutoff} -o ~{cohort_prefix}_outlier_sample_list.txt
-    >>>
-
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: "us.gcr.io/broad-dsde-methods/markw/gatk:2023-07-13-4.4.0.0-43-gd79823f9c-NIGHTLY-SNAPSHOT"
-    }
-
-    output {
-        File outlier_samples_list = "~{cohort_prefix}_outlier_sample_list.txt"
-    }
+  output {
+    File outlier_samples_list = '~{cohort_prefix}_outlier_sample_list.txt'
+  }
 }
 
 task Concat_clusterbatch_vcfs {
