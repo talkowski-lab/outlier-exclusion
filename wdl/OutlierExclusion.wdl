@@ -1,56 +1,80 @@
 version 1.0
 
+workflow OutlierExclusion {
+  input {
 
- workflow outlier_exclusion_analysis{
-    input {
-        String cohort_prefix
-        File join_raw_calls_vcf
-        File join_raw_calls_vcf_index
-        File concordance_vcf
-        File concordance_vcf_index
-        Int disk_size_gb
-        Int machine_mem_mb
-        Int joinrawcalls_sv_counts_size_range_lower_cutoff
-        Int joinrawcalls_sv_counts_size_range_higher_cutoff
-        String svtype
-        File determine_outlier_samples_script
-        Int iqr_multiplier
-        File wgd_score_file
-        Float wgd_lower_cutoff
-        Float wgd_higher_cutoff
-        Array[File] clustered_depth_vcfs
-        Array[File] clustered_manta_vcfs
-        Array[File] clustered_wham_vcfs
-        Array[File] clustered_melt_vcfs
-        #Array[File] clusterbatch_vcf_indexes
-        File identify_outlier_variants_script
-        File identify_join_raw_calls_variants_script
-        File reformat_vcf_header_script
-        File update_outlier_discovery_flag_script
-        File outlier_size_range_variants_script
-        File final_update_outlier_discovery_flag_script
-        File flag_outlier_variants_based_on_size_range_counts_script
-        File proportion_of_outlier_samples_associated_with_variant_script
-        Float fraction_of_outlier_samples
-        String filter_name
-        String bcftools_filter
-        String docker
+    # MakeJoinedRawCallsDB ------------------------------------------------------
+    File joined_raw_calls_vcf
+    File joined_raw_calls_vcf_index
+    File make_tables_sql
+    File duckdb_zip
+    String bcftools_docker
 
+    # CountSVsPerGenome -------------------------------------------------------
+    String countsvs_svtype
+    Int countsvs_max_svlen
+    Int countsvs_min_svlen
+    File templater_awk
+    File count_svs_sql_tmpl
+    String linux_docker
 
-    }
+    String cohort_prefix
+    String filter_name
+    String bcftools_filter
 
-    call JoinRawCalls_sv_counts {
-        input:
-            join_raw_calls_vcf = join_raw_calls_vcf,
-            join_raw_calls_vcf_index = join_raw_calls_vcf_index,
-            cohort_prefix = cohort_prefix,
-            disk_size_gb = disk_size_gb,
-            joinrawcalls_sv_counts_size_range_lower_cutoff = joinrawcalls_sv_counts_size_range_lower_cutoff,
-            joinrawcalls_sv_counts_size_range_higher_cutoff = joinrawcalls_sv_counts_size_range_higher_cutoff,
-            svtype = svtype,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-}
+    File concordance_vcf
+    File concordance_vcf_index
+
+    String svtype
+    Int min_svsize
+    Int max_svsize
+    # Int joinrawcalls_sv_counts_size_range_lower_cutoff
+    # Int joinrawcalls_sv_counts_size_range_higher_cutoff
+    Int iqr_multiplier
+
+    File wgd_score_file
+    Float min_wgd_score
+    Float max_wgd_score
+    # Float wgd_lower_cutoff
+    # Float wgd_higher_cutoff
+    Float fraction_of_outlier_samples
+
+    Array[File] clustered_depth_vcfs
+    Array[File] clustered_manta_vcfs
+    Array[File] clustered_wham_vcfs
+    Array[File] clustered_melt_vcfs
+    #Array[File] clusterbatch_vcf_indexes
+
+    # Scripts
+    File determine_outlier_samples_script
+    File identify_outlier_variants_script
+    File identify_join_raw_calls_variants_script
+    File reformat_vcf_header_script
+    File update_outlier_discovery_flag_script
+    File outlier_size_range_variants_script
+    File final_update_outlier_discovery_flag_script
+    File flag_outlier_variants_based_on_size_range_counts_script
+    File proportion_of_outlier_samples_associated_with_variant_script
+
+    String docker
+    Int disk_size_gb
+    Int machine_mem_mb
+  }
+
+ 
+  call JoinRawCalls_sv_counts {
+    input:
+      cohort_prefix = cohort_prefix,
+      joined_raw_calls_vcf = joined_raw_calls_vcf,
+      joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
+      disk_size_gb = disk_size_gb,
+
+      min_svsize = min_svsize,
+      max_svsize = max_svsize
+      svtype = svtype,
+      docker = docker,
+      machine_mem_mb = machine_mem_mb
+  }
      call Determine_outlier_samples {
          input:
             cohort_prefix = cohort_prefix,
@@ -171,22 +195,141 @@ version 1.0
 
  }
 
+task MakeJoinedRawCallsDB {
+  input {
+    File joined_raw_calls_vcf
+    File joined_raw_calls_vcf_index
+
+    File make_tables_sql
+
+    File duckdb_zip
+
+    String runtime_docker
+  }
+
+  Int disk_size_gb = ceil(size(join_raw_calls_vcf, "GB") * 5.0)
+
+  runtime {
+    memory: "2 GB",
+    disks: "local-disk ${disk_size_gb} HDD",
+    cpus: 1,
+    preemptible: 3,
+    maxRetries: 1,
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    bcftools filter \
+      --include 'INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' \
+      --output-type u
+      --output filtered.bcf \
+      '~{joined_raw_calls_vcf}'
+
+    bcftools query \
+      --include 'GT ~ "1"' \
+      --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
+      filtered.bcf > join_raw_calls_svlens.tsv
+
+    bcftools query \
+      --format '%ID\t%INFO/MEMBERS\n' \
+      filtered.bcf \
+      | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
+      > join_raw_calls_clusters.tsv
+
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
+    cat '~{make_tables_sql}' | ./duckdb joined_raw_calls.duckdb
+  >>>
+
+  output {
+    File joined_raw_calls_db = 'joined_raw_calls.duckdb'
+  }
+}
+
+task CountSVsPerGenome {
+  input {
+    String svtype
+    Int max_svlen
+    Int min_svlen
+    File joined_raw_calls_db
+
+    File templater_awk
+    File count_svs_sql_tmpl
+
+    File duckdb_zip
+
+    String runtime_docker
+  }
+
+  Int disk_size_gb = ceil(size(joined_raw_calls_db, "GB") + 8.0)
+
+  runtime {
+    memory: "4 GB",
+    disks: "local-disk ${disk_size_gb} HDD",
+    cpus: 1,
+    preemptible: 3,
+    maxRetries: 0,
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
+
+    printf 'svtype\t~{svtype}\n' > sql_params.tsv
+    printf 'min_svlen\t~{min_svlin}\n' >> sql_params.tsv
+    printf 'max_svlen\t~{max_svlen}\n' >> sql_params.tsv
+
+    awk -f '~{templater_awk}' 'sql_params.tsv' '~{count_svs_sql_tmpl}' \
+      | ./duckdb '~{joined_raw_calls_db}'
+  >>>
+
+  output {
+    File svcounts_per_genome_all = 'joined_raw_calls_svcounts_ALL.tsv'
+    File svcounts_per_genome_filtered = 'joined_raw_calls_svcount_~{svtype}.tsv'
+  }
+}
+
+
 task JoinRawCalls_sv_counts {
-    input {
-        String cohort_prefix
-        File join_raw_calls_vcf
-        File join_raw_calls_vcf_index
-        Int disk_size_gb
-        Int joinrawcalls_sv_counts_size_range_lower_cutoff
-        Int joinrawcalls_sv_counts_size_range_higher_cutoff
-        String svtype
-        String docker
-        Int machine_mem_mb
-    }
+  input {
+    String cohort_prefix
+    File joined_raw_calls_vcf
+    File joined_raw_calls_vcf_index
+    Int disk_size_gb
+    Int min_svsize
+    Int max_svsize
+    String svtype
+    String docker
+    Int machine_mem_mb
+  }
 
-    command <<<
-        set -euo pipefail
+  command <<<
+    set -euo pipefail
 
+    bcftools query \
+      --include 'GT ~ "1" & (INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS")' \
+      --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
+      '~{joined_raw_calls_vcf}' > join_raw_calls_svlens.tsv
+
+    bcftools query \
+      --include 'GT ~ "1" & (INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS")' \
+      --format '%ID\t%INFO/MEMBERS\n' \
+      '~{join_raw_calls_vcf}' \
+      | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
+      > join_raw_calls_vids.tsv
+
+ 
         svtk vcf2bed --include-filters -i ALL ~{join_raw_calls_vcf} ~{cohort_prefix}.join_raw_calls.bed
         awk -F'\t' '{
             split($6, samples, ",");
