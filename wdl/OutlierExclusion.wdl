@@ -93,8 +93,8 @@ workflow OutlierExclusion {
   call DetermineOutlierSamples {
     input:
       cohort_prefix = cohort_prefix,
-      sv_counts_per_genome_all = sv_counts_per_genome_all,
-      sv_counts_per_genome_filtered = sv_counts_per_genome_filtered,
+      sv_counts_per_genome_all = CountSVsPerGenome.sv_counts_per_genome_all,
+      sv_counts_per_genome_filtered = CountSVsPerGenome.sv_counts_per_genome_filtered,
       wgd_scores = wgd_scores,
       min_wgd_score = min_wgd_score,
       max_wgd_score = max_wgd_score,
@@ -103,19 +103,6 @@ workflow OutlierExclusion {
       runtime_docker = pandas_docker
   }
 
-            cohort_prefix = cohort_prefix,
-            determine_outlier_samples_script = determine_outlier_samples_script,
-            join_raw_calls_sv_counts = JoinRawCalls_sv_counts.join_raw_calls_sv_counts,
-            join_raw_calls_sv_counts_specific_size_range = JoinRawCalls_sv_counts.join_raw_calls_sv_counts_specific_size_range,
-            iqr_multiplier = iqr_multiplier,
-            disk_size_gb = disk_size_gb,
-            wgd_score_file = wgd_score_file,
-            wgd_lower_cutoff = wgd_lower_cutoff,
-            wgd_higher_cutoff = wgd_higher_cutoff,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-
-     }
      call Concat_clusterbatch_vcfs {
          input:
             cohort_prefix = cohort_prefix,
