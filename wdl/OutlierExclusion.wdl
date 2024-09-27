@@ -501,42 +501,47 @@ task DetermineOutlierVariants {
   }
 }
 
-task Reformat_concordance_vcf_header {
-    input {
-        String cohort_prefix
-        File concordance_vcf
-        File concordance_vcf_index
-        File reformat_vcf_header_script
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
+task ReformatConcordanceVCF {
+  input {
+    String cohort_prefix
+    File concordance_vcf
+    File concordance_vcf_index
+    File reformat_vcf_header_script
 
-    command <<<
-        set -euo pipefail
+    String runtime_docker
+  }
 
-        bcftools view -h ~{concordance_vcf} | grep '##FILTER' > ~{cohort_prefix}_concordance_header.txt
+  Int disk_size_gb = ceil(size(concordance_vcf) * 2.0 + 8.0)
+  command <<<
+    set -euo pipefail
 
-        echo '##FILTER=<ID=outlier_discovered,Description="Variant with only outlier samples associated">' >> ~{cohort_prefix}_concordance_header.txt
+    bcftools view -h '~{concordance_vcf}' \
+      | grep '##FILTER' > concordance_header.txt
 
-        python3 ~{reformat_vcf_header_script} -i ~{concordance_vcf} -hf ~{cohort_prefix}_concordance_header.txt -o ~{cohort_prefix}_reformatted_concordance_vcf_header.vcf.gz
+    echo '##FILTER=<ID=outlier_discovered,Description="Variant with only outlier samples associated">' >> concordance_header.txt
 
-        tabix -f ~{cohort_prefix}_reformatted_concordance_vcf_header.vcf.gz
-    >>>
+    python3 '~{reformat_vcf_header_script}' \
+      -i '~{concordance_vcf}' \
+      -hf concordance_header.txt \
+      -o '~{cohort_prefix}_reformatted_concordance.vcf.gz'
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+    tabix -f '~{cohort_prefix}_reformatted_concordance.vcf.gz'
+  >>>
 
-    output {
-        File reformatted_concordance_header_vcf = "~{cohort_prefix}_reformatted_concordance_vcf_header.vcf.gz"
-        File reformatted_concordance_header_vcf_index = "~{cohort_prefix}_reformatted_concordance_vcf_header.vcf.gz.tbi"
-    }
+  runtime {
+    memory: '2 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb} HDD'
+    preemptible: 1
+    maxRetries: 0
+    docker: runtime_docker
+  }
+
+  output {
+    File reformatted_concordance_vcf = '~{cohort_prefix}_reformatted_concordance.vcf.gz'
+    File reformatted_concordance_vcf_index = '~{cohort_prefix}_reformatted_concordance.vcf.gz.tbi'
+  }
 }
 
 task Outlier_discovery_flag {
