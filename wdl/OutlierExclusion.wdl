@@ -184,7 +184,7 @@ task MakeJoinedRawCallsDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(join_raw_calls_vcf, 'GB') * 5.0)
+  Int disk_size_gb = ceil(size(join_raw_calls_vcf, 'GB') * 10.0)
 
   runtime {
     memory: '2 GB'
@@ -203,7 +203,7 @@ task MakeJoinedRawCallsDB {
 
     bcftools filter \
       --include 'INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' \
-      --output-type b
+      --output-type u
       --output filtered.bcf \
       '~{joined_raw_calls_vcf}'
 
