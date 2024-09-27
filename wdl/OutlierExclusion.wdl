@@ -58,7 +58,6 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
-      make_tables_sql = make_tables_sql,
       duckdb_zip = duckdb_zip,
       runtime_docker = bcftools_docker
   }
@@ -67,10 +66,8 @@ workflow OutlierExclusion {
     input:
       svtype = countsvs_svtype,
       min_svlen = countsvs_min_svlen,
-      max_svlen = countsvs_max_svlen
-      MakeJoinedRawCallsDB.joined_raw_calls_db,
-      templater_awk = templater_awk,
-      count_svs_sql_tmpl = count_svs_sql_tmpl,
+      max_svlen = countsvs_max_svlen,
+      joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       duckdb_zip = duckdb_zip,
       runtime_docker = linux_docker
   }
@@ -91,7 +88,7 @@ workflow OutlierExclusion {
   call DetermineOutlierVariants {
     input:
       cohort_prefix = cohort_prefix,
-      outlier_samples = DetermineOutlierSamples.outlier_samples_list,
+      outlier_samples = DetermineOutlierSamples.outlier_samples,
       clustered_depth_vcfs = clustered_depth_vcfs,
       clustered_manta_vcfs = clustered_manta_vcfs,
       clustered_wham_vcfs = clustered_wham_vcfs,
@@ -99,7 +96,7 @@ workflow OutlierExclusion {
       clustered_depth_vcf_indicies = clustered_depth_vcf_indicies,
       clustered_manta_vcf_indicies = clustered_manta_vcf_indicies,
       clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
-      clustered_melt_vcf_indicies = clustered_melt_vcf_indicies
+      clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
       concordance_vcf = concordance_vcf,
       concordance_vcf_index = concordance_vcf_index,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
@@ -156,12 +153,12 @@ workflow OutlierExclusion {
   call ApplyManualFilter {
     input:
       cohort_prefix = cohort_prefix,
-      vcf = Remove_outlier_samples.outlier_samples_removed_vcf,
-      vcf_index = Remove_outlier_samples.outlier_samples_removed_vcf_index,
+      vcf = RemoveOutlierSamples.outliers_removed_vcf,
+      vcf_index = RemoveOutlierSamples.outliers_removed_vcf_index,
       filter_name = filter_name,
       bcftools_filter = bcftools_filter,
-      runtime_docker = bcftools_docker,
-   }
+      runtime_docker = bcftools_docker
+  }
 
   output {
     File manual_filtered_and_flagged_vcf = ApplyManualFilter.hard_filtered_vcf
@@ -179,7 +176,7 @@ task MakeJoinedRawCallsDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(join_raw_calls_vcf, 'GB') * 10.0)
+  Int disk_size_gb = ceil(size(joined_raw_calls_vcf, 'GB') * 10.0)
 
   runtime {
     memory: '2 GB'
@@ -331,13 +328,13 @@ task DetermineOutlierSamples {
     set -euo pipefail
 
     python3 '~{determine_outlier_samples_script}' \
-      -s '~{sv_counts_per_genome}' \
+      -s '~{sv_counts_per_genome_all}' \
       -r '~{sv_counts_per_genome_filtered}'
       -i ~{iqr_multiplier} \
       -w '~{wgd_scores}' \
-      -l '~{wgd_lower_cutoff}' \
-      -hi '~{wgd_higher_cutoff}' \
-      -o '~{cohort_prefix}_outlier_sample_list.txt'
+      -l '~{min_wgd_score}' \
+      -hi '~{max_wgd_score}' \
+      -o '~{cohort_prefix}_outlier_sample.list'
   >>>
 
   runtime {
@@ -351,7 +348,7 @@ task DetermineOutlierSamples {
   }
 
   output {
-    File outlier_samples_list = '~{cohort_prefix}_outlier_sample_list.txt'
+    File outlier_samples = '~{cohort_prefix}_outlier_sample.list'
   }
 }
 
@@ -546,7 +543,7 @@ task FlagOutlierVariantsStep0 {
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
     preemptible: 1
-    docker: docker
+    docker: runtime_docker
   }
 
   command <<<
@@ -563,12 +560,12 @@ task FlagOutlierVariantsStep0 {
       '~{cohort_prefix}_outlier_flagged.bed'
 
     python3 '~{outlier_size_range_variants_script}' \
-      -o '~{outlier_samples_file}' \
+      -o '~{outlier_samples}' \
       -i '~{cohort_prefix}_outlier_flagged.bed' \
       -out '~{cohort_prefix}_outlier_size_range_filtered_variants' \
       -t '~{svtype}' \
-      -l ~{svtype_size_range_lower_cutoff}
-      -hi ~{svtype_size_range_higher_cutoff}
+      -l ~{min_svlen}
+      -hi ~{max_svlen}
 
     python3 '~{final_update_outlier_discovery_flag_script}' \
       -i '~{cohort_prefix}_outlier_flagged.vcf.gz' \
