@@ -36,6 +36,10 @@ workflow OutlierExclusion {
     File concordance_vcf
     File concordance_vcf_index
 
+    # ReformatConcordanceVCF --------------------------------------------------
+    File reformat_vcf_header_script
+    String pysam_docker
+
     String filter_name
     String bcftools_filter
 
@@ -116,17 +120,13 @@ workflow OutlierExclusion {
       runtime_docker = bcftools_docker
   }
 
-     call Reformat_concordance_vcf_header {
-         input:
-            cohort_prefix = cohort_prefix,
-            concordance_vcf = concordance_vcf,
-            concordance_vcf_index = concordance_vcf_index,
-            reformat_vcf_header_script = reformat_vcf_header_script,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-
-     }
+  call ReformatConcordanceVCF {
+    input:
+      cohort_prefix = cohort_prefix,
+      concordance_vcf = concordance_vcf,
+      concordance_vcf_index = concordance_vcf_index,
+      reformat_vcf_header_script = reformat_vcf_header_script,
+  }
 
      call Outlier_discovery_flag {
          input:
@@ -191,7 +191,7 @@ workflow OutlierExclusion {
         File manual_filtered_and_flagged_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
      }
 
- }
+}
 
 task MakeJoinedRawCallsDB {
   input {
