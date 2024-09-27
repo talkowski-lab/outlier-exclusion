@@ -429,7 +429,7 @@ task DetermineOutlierVariants {
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
 
-    ./duckdb outliers.duckdb << 'EOF'
+    ./duckdb outlier_samples.duckdb << 'EOF'
     CREATE TABLE outlier_samples (
         sample VARCHAR
     );
@@ -452,9 +452,9 @@ task DetermineOutlierVariants {
         --format '[%ID\t%SAMPLE\n]' \
         "${vcf}"
     done < '~{write_lines(clusterbatch_vcfs)}' \
-      | ./duckdb outliers.duckdb "COPY variants FROM '/dev/stdin' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+      | ./duckdb outliers_samples.duckdb "COPY variants FROM '/dev/stdin' (FORMAT CSV, DELIMITER '\t', HEADER false);"
 
-    ./duckdb outliers.duckdb > clusterbatch_outliers.list << 'EOF'
+    ./duckdb outliers_samples.duckdb > clusterbatch_outliers.list << 'EOF'
     .mode tabs
     SELECT vid
     FROM (
