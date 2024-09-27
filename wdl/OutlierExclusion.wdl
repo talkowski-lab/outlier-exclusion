@@ -6,13 +6,13 @@ workflow OutlierExclusion {
     # MakeJoinedRawCallsDB ------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    String countsvs_svtype
-    File duckdb_zip
+    Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
+    File duckdb_zip = 'https://github.com/duckdb/duckdb/releases/download/v1.1.1/duckdb_cli-linux-amd64.zip'
     String bcftools_docker
 
     # CountSVsPerGenome -------------------------------------------------------
-    Int countsvs_max_svlen
     Int countsvs_min_svlen
+    Int countsvs_max_svlen
     String linux_docker
 
     # DetermineOutlierSamples -------------------------------------------------
@@ -58,7 +58,7 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
-      svtype = countsvs_svtype,
+      svtypes_to_filter = svtypes_to_filter,
       duckdb_zip = duckdb_zip,
       runtime_docker = bcftools_docker
   }
@@ -174,14 +174,13 @@ task MakeJoinedRawCallsDB {
   input {
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    File svtype
-
+    Array[String] svtypes_to_filter
     File duckdb_zip
 
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(joined_raw_calls_vcf, 'GB') * 10.0)
+  Int disk_size_gb = ceil(size(joined_raw_calls_vcf, 'GB') * 10.0 + 8.0)
 
   runtime {
     memory: '2 GB'
@@ -198,12 +197,33 @@ task MakeJoinedRawCallsDB {
     set -o nounset
     set -o pipefail
 
-    filter_exp='INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' 
-    if awk 'BEGIN{if ("~{svtype}" ~ /DEL|DUP|INV|INS/) {exit 0} else {exit 1}}'; then
-      filter_exp="${filter_exp} || INFO/SVTYPE = ~{svtype}"
-    fi
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
+
+    ./duckdb joined_raw_calls_db.duckdb > svtypes.list << EOF
+    CREATE TABLE joined_raw_calls_svlens (
+        vid VARCHAR,
+        svtype VARCHAR,
+        svlen INTEGER,
+        sample VARCHAR
+    );
+    CREATE TABLE joined_raw_calls_clusters (
+        vid VARCHAR,
+        member VARCHAR
+    );
+    CREATE TABLE filters (svtype VARCHAR, max_svlen DOUBLE, min_svlen DOUBLE);
+    COPY filters FROM '~{write_lines(svtypes_to_filter)}' (
+        FORMAT CSV,
+        DELIMITER ';',
+        HEADER false
+    );
+    .mode tabs
+    .header off
+    SELECT DISTINCT(svtype) FROM svs;
+    EOF
+     
     bcftools filter \
-      --include "${filter_exp}" \
+      --include 'INFO/SVTYPE=@svtypes.list' \
       --output-type u
       --output filtered.bcf \
       '~{joined_raw_calls_vcf}'
@@ -219,29 +239,13 @@ task MakeJoinedRawCallsDB {
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
       > joined_raw_calls_clusters.tsv
 
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
-
     ./duckdb joined_raw_calls.duckdb << 'EOF'
-    CREATE TABLE joined_raw_calls_svlens (
-        vid VARCHAR,
-        svtype VARCHAR,
-        svlen INTEGER,
-        sample VARCHAR
-    );
-
-    CREATE TABLE joined_raw_calls_clusters (
-        vid VARCHAR,
-        member VARCHAR
-    );
-
     COPY joined_raw_calls_svlens
     FROM 'joined_raw_calls_svlens.tsv' (
         FORMAT CSV,
         DELIMITER '\t',
         HEADER false
     );
-
     COPY joined_raw_calls_clusters
     FROM 'joined_raw_calls_clusters.tsv' (
         FORMAT CSV,
@@ -258,9 +262,8 @@ task MakeJoinedRawCallsDB {
 
 task CountSVsPerGenome {
   input {
-    String svtype
-    Int max_svlen
     Int min_svlen
+    Int max_svlen
     File joined_raw_calls_db
 
     File duckdb_zip
