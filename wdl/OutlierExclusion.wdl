@@ -110,7 +110,8 @@ workflow OutlierExclusion {
       cohort_prefix = cohort_prefix,
       concordance_vcf = concordance_vcf,
       concordance_vcf_index = concordance_vcf_index,
-      reformat_vcf_header_script = reformat_vcf_header_script
+      reformat_vcf_header_script = reformat_vcf_header_script,
+      runtime_docker = svtk_docker
   }
 
   call FlagOutlierVariantsStep0 {
@@ -139,6 +140,8 @@ workflow OutlierExclusion {
       min_svlen = countsvs_min_svlen,
       max_svlen = countsvs_max_svlen,
       fraction_of_outlier_samples = fraction_of_outlier_samples,
+      flag_outlier_variants_based_on_size_range_counts_script = flag_outlier_variants_based_on_size_range_counts_script,
+      proportion_of_outlier_samples_associated_with_variant_script = proportion_of_outlier_samples_associated_with_variant_script,
       runtime_docker = svtk_docker
   }
 
