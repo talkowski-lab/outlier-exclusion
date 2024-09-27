@@ -6,7 +6,6 @@ workflow OutlierExclusion {
     # MakeJoinedRawCallsDB ------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    File make_tables_sql
     File duckdb_zip
     String bcftools_docker
 
@@ -14,8 +13,6 @@ workflow OutlierExclusion {
     String countsvs_svtype
     Int countsvs_max_svlen
     Int countsvs_min_svlen
-    File templater_awk
-    File count_svs_sql_tmpl
     String linux_docker
 
     # DetermineOutlierSamples -------------------------------------------------
@@ -27,24 +24,21 @@ workflow OutlierExclusion {
     Int iqr_multiplier
     String pandas_docker
 
-    String filter_name
-    String bcftools_filter
-
+    # DetermineOutlierVariants ------------------------------------------------
+    Array[File] clustered_depth_vcfs
+    Array[File] clustered_manta_vcfs
+    Array[File] clustered_wham_vcfs
+    Array[File] clustered_melt_vcfs
+    Array[File] clustered_depth_vcf_indicies
+    Array[File] clustered_manta_vcf_indicies
+    Array[File] clustered_wham_vcf_indicies
+    Array[File] clustered_melt_vcf_indicies
     File concordance_vcf
     File concordance_vcf_index
 
-    String svtype
-    Int min_svsize
-    Int max_svsize
-    # Int joinrawcalls_sv_counts_size_range_lower_cutoff
-    # Int joinrawcalls_sv_counts_size_range_higher_cutoff
-    Int iqr_multiplier
+    String filter_name
+    String bcftools_filter
 
-    File wgd_score_file
-    Float min_wgd_score
-    Float max_wgd_score
-    # Float wgd_lower_cutoff
-    # Float wgd_higher_cutoff
     Float fraction_of_outlier_samples
 
     Array[File] clustered_depth_vcfs
@@ -103,33 +97,24 @@ workflow OutlierExclusion {
       runtime_docker = pandas_docker
   }
 
-     call Concat_clusterbatch_vcfs {
-         input:
-            cohort_prefix = cohort_prefix,
-            clustered_depth_vcfs = clustered_depth_vcfs,
-            clustered_wham_vcfs = clustered_wham_vcfs,
-            clustered_manta_vcfs = clustered_manta_vcfs,
-            clustered_melt_vcfs = clustered_melt_vcfs,
-            #clusterbatch_vcf_indexes = clusterbatch_vcf_indexes,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-     }
-
-     call Get_outlier_variants {
-         input:
-            outlier_samples_file = Determine_outlier_samples.outlier_samples_list,
-            merged_clusteredvcfs_bedfile = Concat_clusterbatch_vcfs.merged_clusteredvcfs_bed,
-            join_raw_calls_bed = JoinRawCalls_sv_counts.join_raw_calls_bed,
-            concordance_vcf = concordance_vcf,
-            identify_outlier_variants_script = identify_outlier_variants_script,
-            identify_join_raw_calls_variants_script = identify_join_raw_calls_variants_script,
-            cohort_prefix = cohort_prefix,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-
-     }
+  call DetermineOutlierVariants {
+    input:
+      cohort_prefix = cohort_prefix,
+      outlier_samples = DetermineOutlierSamples.outlier_samples_list,
+      clustered_depth_vcfs = clustered_depth_vcfs,
+      clustered_manta_vcfs = clustered_manta_vcfs,
+      clustered_wham_vcfs = clustered_wham_vcfs,
+      clustered_melt_vcfs = clustered_melt_vcfs,
+      clustered_depth_vcf_indicies = clustered_depth_vcf_indicies,
+      clustered_manta_vcf_indicies = clustered_manta_vcf_indicies,
+      clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
+      clustered_melt_vcf_indicies = clustered_melt_vcf_indicies
+      concordance_vcf = concordance_vcf,
+      concordance_vcf_index = concordance_vcf_index,
+      joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
+      duckdb_zip = duckdb_zip,
+      runtime_docker = bcftools_docker
+  }
 
      call Reformat_concordance_vcf_header {
          input:
@@ -213,8 +198,6 @@ task MakeJoinedRawCallsDB {
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
 
-    File make_tables_sql
-
     File duckdb_zip
 
     String runtime_docker
@@ -239,24 +222,51 @@ task MakeJoinedRawCallsDB {
 
     bcftools filter \
       --include 'INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' \
-      --output-type u
+      --output-type b
       --output filtered.bcf \
       '~{joined_raw_calls_vcf}'
 
     bcftools query \
       --include 'GT ~ "1"' \
       --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
-      filtered.bcf > join_raw_calls_svlens.tsv
+      filtered.bcf > joined_raw_calls_svlens.tsv
 
     bcftools query \
       --format '%ID\t%INFO/MEMBERS\n' \
       filtered.bcf \
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      > join_raw_calls_clusters.tsv
+      > joined_raw_calls_clusters.tsv
 
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
-    cat '~{make_tables_sql}' | ./duckdb joined_raw_calls.duckdb
+
+    ./duckdb joined_raw_calls.duckdb << 'EOF'
+    CREATE TABLE joined_raw_calls_svlens (
+        vid VARCHAR,
+        svtype VARCHAR,
+        svlen INTEGER,
+        sample VARCHAR
+    );
+
+    CREATE TABLE joined_raw_calls_clusters (
+        vid VARCHAR,
+        member VARCHAR
+    );
+
+    COPY joined_raw_calls_svlens
+    FROM 'joined_raw_calls_svlens.tsv' (
+        FORMAT CSV,
+        DELIMITER '\t',
+        HEADER false
+    );
+
+    COPY joined_raw_calls_clusters
+    FROM 'joined_raw_calls_clusters.tsv' (
+        FORMAT CSV,
+        DELIMITER '\t',
+        HEADER false
+    );
+    EOF
   >>>
 
   output {
@@ -271,15 +281,12 @@ task CountSVsPerGenome {
     Int min_svlen
     File joined_raw_calls_db
 
-    File templater_awk
-    File count_svs_sql_tmpl
-
     File duckdb_zip
 
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(joined_raw_calls_db, 'GB') + 8.0)
+  Int disk_size_gb = ceil(size(joined_raw_calls_db, 'GB') * 2.0 + 8.0)
 
   runtime {
     memory: '4 GB'
@@ -299,12 +306,24 @@ task CountSVsPerGenome {
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
 
-    printf 'svtype\t~{svtype}\n' > sql_params.tsv
-    printf 'min_svlen\t~{min_svlin}\n' >> sql_params.tsv
-    printf 'max_svlen\t~{max_svlen}\n' >> sql_params.tsv
+    ./duckdb '~{joined_raw_calls_db}' << 'EOF'
+    COPY
+    (SELECT sample, svtype, COUNT(*) AS count
+    FROM joined_raw_calls_svlens
+    GROUP BY sample, svtype)
+    TO 'joined_raw_calls_svcounts_ALL.tsv'
+    (DELIMITER '\t', HEADER true);
 
-    awk -f '~{templater_awk}' 'sql_params.tsv' '~{count_svs_sql_tmpl}' \
-      | ./duckdb '~{joined_raw_calls_db}'
+    PREPARE query_svtype AS
+    SELECT sample, COUNT(*) AS count
+    FROM joined_raw_calls_svlens
+    WHERE svtype = ? AND svlen >= ? AND svlen <= ?
+    GROUP BY sample;
+
+    .mode tabs
+    .once 'joined_raw_calls_svcount_~{svtype}.tsv'
+    EXECUTE query_svtype('~{svtype}', ~{min_svlen}, ~{max_svlen});
+    EOF
   >>>
 
   output {
@@ -330,6 +349,7 @@ task DetermineOutlierSamples {
 
   Float input_size = size([sv_counts_per_genome_all, sv_counts_per_genome_filtered, wgd_scores], 'GB')
   Int mem_gb = ceil(input_size * 1.2)
+  Int disk_size_gb = ceil(input_size * 1.3) + 8
 
   command <<<
     set -euo pipefail
@@ -348,7 +368,7 @@ task DetermineOutlierSamples {
     memory: '~{mem_gb} GB'
     cpu: 1
     bootDiskSizeGb: 15
-    disks: 'local-disk ' + ceil(input_size * 1.3) + ' HDD'
+    disks: 'local-disk ${disk_size_gb} HDD'
     preemptible: 1
     maxRetries: 1
     docker: runtime_docker
@@ -359,118 +379,126 @@ task DetermineOutlierSamples {
   }
 }
 
-task Concat_clusterbatch_vcfs {
-    input {
-        Array[File] clustered_depth_vcfs
-        Array[File] clustered_wham_vcfs
-        Array[File] clustered_manta_vcfs
-        Array[File] clustered_melt_vcfs
-        #Array[File] clusterbatch_vcf_indexes
-        String cohort_prefix
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
-    
-    Array[File] clusterbatch_vcfs = flatten([clustered_depth_vcfs, clustered_wham_vcfs, clustered_manta_vcfs, clustered_melt_vcfs])
+task DetermineOutlierVariants {
+  input {
+    String cohort_prefix
+    File outlier_samples
+    Array[File] clustered_depth_vcfs
+    Array[File] clustered_manta_vcfs
+    Array[File] clustered_wham_vcfs
+    Array[File] clustered_melt_vcfs
+    Array[File] clustered_depth_vcf_indicies
+    Array[File] clustered_manta_vcf_indicies
+    Array[File] clustered_wham_vcf_indicies
+    Array[File] clustered_melt_vcf_indicies
+    File concordance_vcf
+    File concordance_vcf_index
+    File joined_raw_calls_db
 
-    command <<<
-        set -euo pipefail
+    File duckdb_zip
+    String runtime_docker
+  }
 
+  Array[File] clusterbatch_vcfs = flatten([
+    clustered_depth_vcfs, clustered_manta_vcfs, clustered_wham_vcfs,
+    clustered_melt_vcfs
+  ])
 
-        for vcf in ~{sep=' ' clusterbatch_vcfs}; do
-   
-            if [[ -f ${vcf} ]]; then
-                echo "Reindexing VCF file: ${vcf}"
-        
-                if [[ -f "${vcf}.tbi" ]]; then
-                    rm "${vcf}.tbi"
-                fi
-        
-                tabix -p vcf ${vcf}
-            else
-                echo "VCF file not found: ${vcf}"
-            fi
-        done
+  Int disk_size_gb = ceil(
+    size(clusterbatch_vcfs, "GB")
+    + size(concordance_vcf, "GB")
+    + size(joined_raw_calls_db, "GB")
+    + 16.0
+  )
 
+  runtime {
+    memory: '4 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb} HDD'
+    preemptible: 1
+    maxRetries: 0
+    docker: runtime_docker
+  }
 
-        for vcf in ~{sep=' ' clusterbatch_vcfs}; do
-            if [[ -f ${vcf} ]]; then
-                echo "Converting VCF to BED: ${vcf}"
-                svtk vcf2bed --include-filters -i ALL ${vcf} ${vcf}.bed
-            else
-                echo "VCF file not found: ${vcf}"
-            fi
-        done
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
 
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
 
-        bed_files=$(for vcf in ~{sep=' ' clusterbatch_vcfs}; do echo "${vcf}.bed"; done)
-        echo "Concatenating BED files: $bed_files"
-        cat $bed_files > ~{cohort_prefix}_merged_clustered_vcfs.bed
-        
+    ./duckdb outliers.duckdb << 'EOF'
+    CREATE TABLE outlier_samples (
+        sample VARCHAR
+    );
 
-    >>>
+    COPY outlier_samples
+    FROM '~{outlier_samples}' (
+        FORMAT CSV,
+        DELIMITER '\t',
+        HEADER false
+    );
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+    CREATE TABLE variants (
+        vid VARCHAR,
+        sample VARCHAR
+    );
+    EOF
 
-    output {
-        File merged_clusteredvcfs_bed = "~{cohort_prefix}_merged_clustered_vcfs.bed"
-    }
-}
+    while read -r vcf; do
+      bcftools query --include 'GT ~ "1"' \
+        --format '[%ID\t%SAMPLE\n]' \
+        "${vcf}"
+    done < '~{write_lines(clusterbatch_vcfs)}' \
+      | ./duckdb outliers.duckdb "COPY variants FROM '/dev/stdin' (FORMAT CSV, DELIMITER '\t', HEADER false);"
 
-task Get_outlier_variants {
-    input {
-        File outlier_samples_file
-        File merged_clusteredvcfs_bedfile
-        File join_raw_calls_bed
-        File concordance_vcf
-        File identify_outlier_variants_script
-        File identify_join_raw_calls_variants_script
-        Int disk_size_gb
-        String cohort_prefix
-        String docker
-        Int machine_mem_mb
-    }
+    ./duckdb outliers.duckdb > clusterbatch_outliers.list << 'EOF'
+    .mode tabs
+    SELECT vid
+    FROM (
+        SELECT l.vid AS vid, COUNT(*) FILTER(r.sample IS NULL) AS nils
+        FROM variants l
+        LEFT JOIN outlier_samples r
+        USING (sample)
+        GROUP BY vid
+    )
+    WHERE nils = 0;
+    EOF
 
-    command <<<
-        set -euo pipefail
+    ./duckdb '~{joined_raw_calls_db}' > 'joined_raw_calls_outliers.list' << 'EOF'
+    CREATE TEMP TABLE t1 (
+        vid VARCHAR
+    );
 
-        python3 ~{identify_outlier_variants_script} -o ~{outlier_samples_file} -v ~{merged_clusteredvcfs_bedfile} -out ~{cohort_prefix}_extracted_variants.tsv
+    COPY t1
+    FROM 'clusterbatch_outliers.list' (
+        FORMAT CSV,
+        DELIMITER '\t',
+        HEADER false
+    );
 
-        python3 ~{identify_join_raw_calls_variants_script} -e ~{cohort_prefix}_extracted_variants.tsv -b ~{join_raw_calls_bed} -out ~{cohort_prefix}_join_raw_calls_variants.txt
+    .mode tabs
+    .header off
+    SELECT jrc.vid
+    FROM joined_raw_calls_clusters jrc
+    JOIN t1 ON (jrc.member = t1.vid)
+    ORDER BY jrc.vid ASC;
+    EOF
 
-        svtk vcf2bed --include-filters -i ALL ~{concordance_vcf} ~{cohort_prefix}_concordance.bed
+    bcftools query --include 'INFO/TRUTH_VID != ""' \
+      --format '%ID\t%INFO/TRUTH_VID\n' \
+      '~{concordance_vcf}' \
+      | LC_ALL=C sort -k2,2 > concordance_vids.tsv
+    LC_ALL=C join -1 2 -2 1 -o 1.1 \
+      concordance_vids.tsv \
+      joined_raw_calls_outliers.list > '~{cohort_prefix}_concordance_calls_outlier_vids.list'
+  >>>
 
-        cut -f1,2,3,4,35 ~{cohort_prefix}_concordance.bed > ~{cohort_prefix}_concordance_variants_and_truth_variants.bed
-
-        cut -f35 ~{cohort_prefix}_concordance.bed > ~{cohort_prefix}_SV_concordance_variant_ids.txt
-
-        cut -f4,5 ~{cohort_prefix}_concordance_variants_and_truth_variants.bed > concordance_filtered_variants_and_truth_variants.tsv
-
-        comm -12 <(sort ~{cohort_prefix}_join_raw_calls_variants.txt) <(sort ~{cohort_prefix}_SV_concordance_variant_ids.txt) > ~{cohort_prefix}_filtered_outlier_variants.txt
-
-        awk 'NR==FNR {ids[$1]; next} $2 in ids {print $1}' ~{cohort_prefix}_filtered_outlier_variants.txt concordance_filtered_variants_and_truth_variants.tsv > ~{cohort_prefix}_concordance_final_outlier_variant_ids.txt
-    >>>
-
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
-
-    output {
-        File cohort_concordance_outlier_variants = "~{cohort_prefix}_concordance_final_outlier_variant_ids.txt"
-    }
+  output {
+    File outlier_variants = '${cohort_prefix}_concordance_calls_outlier_vids.list'
+  }
 }
 
 task Reformat_concordance_vcf_header {
