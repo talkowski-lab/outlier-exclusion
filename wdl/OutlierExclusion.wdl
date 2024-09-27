@@ -6,11 +6,11 @@ workflow OutlierExclusion {
     # MakeJoinedRawCallsDB ------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
+    String countsvs_svtype
     File duckdb_zip
     String bcftools_docker
 
     # CountSVsPerGenome -------------------------------------------------------
-    String countsvs_svtype
     Int countsvs_max_svlen
     Int countsvs_min_svlen
     String linux_docker
@@ -58,6 +58,7 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
+      svtype = countsvs_svtype,
       duckdb_zip = duckdb_zip,
       runtime_docker = bcftools_docker
   }
@@ -170,6 +171,7 @@ task MakeJoinedRawCallsDB {
   input {
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
+    File svtype
 
     File duckdb_zip
 
@@ -193,8 +195,12 @@ task MakeJoinedRawCallsDB {
     set -o nounset
     set -o pipefail
 
+    filter_exp='INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' 
+    if awk 'BEGIN{if ("~{svtype}" ~ /DEL|DUP|INV|INS/) {exit 0} else {exit 1}}'; then
+      filter_exp="${filter_exp} || INFO/SVTYPE = ~{svtype}"
+    fi
     bcftools filter \
-      --include 'INFO/SVTYPE ~ "^DEL" || INFO/SVTYPE ~ "^DUP" || INFO/SVTYPE ~ "^INV" || INFO/SVTYPE ~ "^INS"' \
+      --include "${filter_exp}" \
       --output-type u
       --output filtered.bcf \
       '~{joined_raw_calls_vcf}'
