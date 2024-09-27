@@ -22,7 +22,7 @@ workflow OutlierExclusion {
     Float min_wgd_score
     Float max_wgd_score
     Int iqr_multiplier
-    String pandas_docker
+    String svtk_docker
 
     # DetermineOutlierVariants ------------------------------------------------
     Array[File] clustered_depth_vcfs
@@ -38,33 +38,16 @@ workflow OutlierExclusion {
 
     # ReformatConcordanceVCF --------------------------------------------------
     File reformat_vcf_header_script
-    String pysam_docker
+
+    # FlagOutlierVariants -----------------------------------------------------
+    File update_outlier_discovery_flag_script
+    File outlier_size_range_variants_script
+    File final_update_outlier_discovery_flag_script
 
     String filter_name
     String bcftools_filter
 
     Float fraction_of_outlier_samples
-
-    Array[File] clustered_depth_vcfs
-    Array[File] clustered_manta_vcfs
-    Array[File] clustered_wham_vcfs
-    Array[File] clustered_melt_vcfs
-    #Array[File] clusterbatch_vcf_indexes
-
-    # Scripts
-    File determine_outlier_samples_script
-    File identify_outlier_variants_script
-    File identify_join_raw_calls_variants_script
-    File reformat_vcf_header_script
-    File update_outlier_discovery_flag_script
-    File outlier_size_range_variants_script
-    File final_update_outlier_discovery_flag_script
-    File flag_outlier_variants_based_on_size_range_counts_script
-    File proportion_of_outlier_samples_associated_with_variant_script
-
-    String docker
-    Int disk_size_gb
-    Int machine_mem_mb
   }
 
   call MakeJoinedRawCallsDB {
@@ -98,7 +81,7 @@ workflow OutlierExclusion {
       max_wgd_score = max_wgd_score,
       iqr_multiplier = iqr_multiplier,
       determine_outlier_samples_script = determine_outlier_samples_script,
-      runtime_docker = pandas_docker
+      runtime_docker = svtk_docker
   }
 
   call DetermineOutlierVariants {
@@ -125,26 +108,24 @@ workflow OutlierExclusion {
       cohort_prefix = cohort_prefix,
       concordance_vcf = concordance_vcf,
       concordance_vcf_index = concordance_vcf_index,
-      reformat_vcf_header_script = reformat_vcf_header_script,
+      reformat_vcf_header_script = reformat_vcf_header_script
   }
 
-     call Outlier_discovery_flag {
-         input:
-            update_outlier_discovery_flag_script = update_outlier_discovery_flag_script,
-            outlier_size_range_variants_script = outlier_size_range_variants_script,
-            final_update_outlier_discovery_flag_script = final_update_outlier_discovery_flag_script,
-            reheadered_concordance_vcf = Reformat_concordance_vcf_header.reformatted_concordance_header_vcf,
-            reheadered_concordance_vcf_index = Reformat_concordance_vcf_header.reformatted_concordance_header_vcf_index,
-            concordance_final_outlier_variants = Get_outlier_variants.cohort_concordance_outlier_variants,
-            cohort_prefix = cohort_prefix,
-            outlier_samples_file = Determine_outlier_samples.outlier_samples_list,
-            svtype_size_range_lower_cutoff = joinrawcalls_sv_counts_size_range_lower_cutoff,
-            svtype_size_range_higher_cutoff = joinrawcalls_sv_counts_size_range_higher_cutoff,
-            svtype = svtype,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-     }
+  call FlagOutlierVariants {
+    input:
+      reformatted_concordance_vcf = ReformatConcordanceVCF.reformatted_concordance_vcf,
+      reformatted_concordance_vcf_index = ReformatConcordanceVCF.reformatted_concordance_vcf_index,
+      concordance_outlier_variants = DetermineOutlierVariants.outlier_variants,
+      cohort_prefix = cohort_prefix,
+      outlier_samples = DetermineOutlierSamples.outlier_samples,
+      min_svlen = countsvs_min_svlen,
+      max_svlen = countsvs_max_svlen,
+      svtype = countsvs_svtype,
+      update_outlier_discovery_flag_script = update_outlier_discovery_flag_script,
+      outlier_size_range_variants_script = outlier_size_range_variants_script,
+      final_update_outlier_discovery_flag_script = final_update_outlier_discovery_flag_script,
+      runtime_docker = svtk_docker
+  }
 
      call Outlier_size_range_outlier_discovery_flagging {
          input:
@@ -544,50 +525,65 @@ task ReformatConcordanceVCF {
   }
 }
 
-task Outlier_discovery_flag {
-    input {
-        File update_outlier_discovery_flag_script
-        File outlier_size_range_variants_script
-        File final_update_outlier_discovery_flag_script
-        File reheadered_concordance_vcf
-        File reheadered_concordance_vcf_index
-        File concordance_final_outlier_variants
-        String cohort_prefix
-        File outlier_samples_file
-        Int svtype_size_range_lower_cutoff
-        Int svtype_size_range_higher_cutoff
-        String svtype
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
+task FlagOutlierVariants {
+  input {
+    File reformatted_concordance_vcf
+    File reformatted_concordance_vcf_index
+    File concordance_outlier_variants
+    String cohort_prefix
+    File outlier_samples
+    Int min_svlen
+    Int max_svlen
+    String svtype
 
-    command <<<
-        set -euo pipefail
+    File update_outlier_discovery_flag_script
+    File outlier_size_range_variants_script
+    File final_update_outlier_discovery_flag_script
 
-        python3 ~{update_outlier_discovery_flag_script} -i ~{reheadered_concordance_vcf} -v ~{concordance_final_outlier_variants} -o ~{cohort_prefix}_filtered_outlier_discovered_flag_added.vcf.gz
-        tabix ~{cohort_prefix}_filtered_outlier_discovered_flag_added.vcf.gz
+    String runtime_docker
+  }
 
-        svtk vcf2bed --include-filters -i ALL ~{cohort_prefix}_filtered_outlier_discovered_flag_added.vcf.gz ~{cohort_prefix}_filtered_outlier_discovered_flag_added.bed
-        python3 ~{outlier_size_range_variants_script} -o ~{outlier_samples_file} -i ~{cohort_prefix}_filtered_outlier_discovered_flag_added.bed -out ~{cohort_prefix}_outlier_size_range_filtered_variants -t ~{svtype} -l ~{svtype_size_range_lower_cutoff} -hi ~{svtype_size_range_higher_cutoff}
+  runtime {
+    memory: "~{machine_mem_mb} MiB"
+    cpu: "1"
+    bootDiskSizeGb: 15
+    disks: "local-disk " + disk_size_gb + " HDD"
+    preemptible: 1
+    docker: docker
+  }
 
-        python3 ~{final_update_outlier_discovery_flag_script} -i ~{cohort_prefix}_filtered_outlier_discovered_flag_added.vcf.gz -o ~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.vcf.gz -f ~{cohort_prefix}_outlier_size_range_filtered_variants
-        tabix ~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.vcf.gz
-    >>>
+  command <<<
+    set -euo pipefail
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+    python3 '~{update_outlier_discovery_flag_script}' \
+      -i '~{reformatted_concordance_vcf}' \
+      -v '~{concordance_outlier_variants}' \
+      -o '~{cohort_prefix}_outlier_flagged.vcf.gz'
+    tabix '~{cohort_prefix}_outlier_flagged.vcf.gz'
 
-    output {
-        File outlier_size_range_flagged_vcf = "~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.vcf.gz"
-        File outlier_size_range_flagged_vcf_index = "~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.vcf.gz.tbi"
-    }
+    svtk vcf2bed --include-filters -i ALL \
+      '~{cohort_prefix}_outlier_flagged.vcf.gz' \
+      '~{cohort_prefix}_outlier_flagged.bed'
+
+    python3 '~{outlier_size_range_variants_script}' \
+      -o '~{outlier_samples_file}' \
+      -i '~{cohort_prefix}_outlier_flagged.bed' \
+      -out '~{cohort_prefix}_outlier_size_range_filtered_variants' \
+      -t '~{svtype}' \
+      -l ~{svtype_size_range_lower_cutoff}
+      -hi ~{svtype_size_range_higher_cutoff}
+
+    python3 '~{final_update_outlier_discovery_flag_script}' \
+      -i '~{cohort_prefix}_outlier_flagged.vcf.gz' \
+      -o '~{cohort_prefix}_outliers_flagged_FINAL.vcf.gz' \
+      -f '~{cohort_prefix}_outlier_size_range_filtered_variants'
+    tabix ~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz
+  >>>
+
+  output {
+    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz'
+    File outlier_flagged_vcf_index= '~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz.tbi'
+  }
 }
 
 task Outlier_size_range_outlier_discovery_flagging {
