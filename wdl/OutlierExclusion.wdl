@@ -543,11 +543,13 @@ task FlagOutlierVariants {
     String runtime_docker
   }
 
+  Int disk_size_gb = ceil(size(reformatted_concordance_vcf, "GB") * 5.0 + 8.0)
+
   runtime {
-    memory: "~{machine_mem_mb} MiB"
-    cpu: "1"
-    bootDiskSizeGb: 15
-    disks: "local-disk " + disk_size_gb + " HDD"
+    memory: '4 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb} HDD'
     preemptible: 1
     docker: docker
   }
