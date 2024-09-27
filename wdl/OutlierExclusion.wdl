@@ -39,15 +39,19 @@ workflow OutlierExclusion {
     # ReformatConcordanceVCF --------------------------------------------------
     File reformat_vcf_header_script
 
-    # FlagOutlierVariants -----------------------------------------------------
+    # FlagOutlierVariantsStep0 ------------------------------------------------
     File update_outlier_discovery_flag_script
     File outlier_size_range_variants_script
     File final_update_outlier_discovery_flag_script
 
+    # FlagOutlierVariantsStep1 ------------------------------------------------
+    Float fraction_of_outlier_samples
+    File flag_outlier_variants_based_on_size_range_counts_script
+    File proportion_of_outlier_samples_associated_with_variant_script
+
+    # ApplyManualFilter -------------------------------------------------------
     String filter_name
     String bcftools_filter
-
-    Float fraction_of_outlier_samples
   }
 
   call MakeJoinedRawCallsDB {
@@ -111,7 +115,7 @@ workflow OutlierExclusion {
       reformat_vcf_header_script = reformat_vcf_header_script
   }
 
-  call FlagOutlierVariants {
+  call FlagOutlierVariantsStep0 {
     input:
       reformatted_concordance_vcf = ReformatConcordanceVCF.reformatted_concordance_vcf,
       reformatted_concordance_vcf_index = ReformatConcordanceVCF.reformatted_concordance_vcf_index,
@@ -127,51 +131,42 @@ workflow OutlierExclusion {
       runtime_docker = svtk_docker
   }
 
-     call Outlier_size_range_outlier_discovery_flagging {
-         input:
-            outlier_discovery_flagging_in_size_range_vcf = Outlier_discovery_flag.outlier_size_range_flagged_vcf,
-            outlier_discovery_flagging_in_size_range_vcf_index = Outlier_discovery_flag.outlier_size_range_flagged_vcf_index,
-            flag_outlier_variants_based_on_size_range_counts_script = flag_outlier_variants_based_on_size_range_counts_script,
-            proportion_of_outlier_samples_associated_with_variant_script = proportion_of_outlier_samples_associated_with_variant_script,
-            outlier_samples_file = Determine_outlier_samples.outlier_samples_list,
-            cohort_prefix = cohort_prefix,
-            disk_size_gb = disk_size_gb,
-            svtype = svtype,
-            svtype_size_range_lower_cutoff = joinrawcalls_sv_counts_size_range_lower_cutoff,
-            svtype_size_range_higher_cutoff = joinrawcalls_sv_counts_size_range_higher_cutoff,
-            fraction_of_outlier_samples = fraction_of_outlier_samples,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-     }
+  call FlagOutlierVariantsStep1 {
+    input:
+      step0_outlier_flagged_vcf = FlagOutlierVariantsStep0.outlier_flagged_vcf,
+      step0_outlier_flagged_vcf_index = FlagOutlierVariantsStep0.outlier_flagged_vcf_index,
+      cohort_prefix = cohort_prefix,
+      outlier_samples = DetermineOutlierSamples.outlier_samples,
+      svtype = countsvs_svtype,
+      min_svlen = countsvs_min_svlen,
+      max_svlen = countsvs_max_svlen,
+      fraction_of_outlier_samples = fraction_of_outlier_samples,
+      runtime_docker = svtk_docker
+  }
 
-     call Remove_outlier_samples {
-         input:
-            final_flagged_vcf = Outlier_size_range_outlier_discovery_flagging.all_cohort_outlier_variants_flagged_vcf,
-            final_flagged_vcf_index = Outlier_size_range_outlier_discovery_flagging.all_cohort_outlier_variants_flagged_vcf_index,
-            outlier_samples_list = Determine_outlier_samples.outlier_samples_list,
-            cohort_prefix = cohort_prefix,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-     }
+  call RemoveOutlierSamples {
+    input:
+      final_flagged_vcf = FlagOutlierVariantsStep1.outlier_flagged_vcf,
+      final_flagged_vcf_index = FlagOutlierVariantsStep1.outlier_flagged_vcf_index,
+      outlier_samples = DetermineOutlierSamples.outlier_samples,
+      cohort_prefix = cohort_prefix,
+      runtime_docker = bcftools_docker
+  }
 
-     call ApplyManualFilter {
-         input:
-            cohort_prefix = cohort_prefix,
-            vcf = Remove_outlier_samples.outlier_samples_removed_vcf,
-            vcf_index = Remove_outlier_samples.outlier_samples_removed_vcf_index,
-            filter_name = filter_name,
-            bcftools_filter = bcftools_filter,
-            disk_size_gb = disk_size_gb,
-            docker = docker,
-            machine_mem_mb = machine_mem_mb
-     }
+  call ApplyManualFilter {
+    input:
+      cohort_prefix = cohort_prefix,
+      vcf = Remove_outlier_samples.outlier_samples_removed_vcf,
+      vcf_index = Remove_outlier_samples.outlier_samples_removed_vcf_index,
+      filter_name = filter_name,
+      bcftools_filter = bcftools_filter,
+      runtime_docker = bcftools_docker,
+   }
 
-     output {
-        File manual_filtered_and_flagged_vcf = ApplyManualFilter.hard_filtered_vcf
-        File manual_filtered_and_flagged_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
-     }
-
+  output {
+    File manual_filtered_and_flagged_vcf = ApplyManualFilter.hard_filtered_vcf
+    File manual_filtered_and_flagged_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
+  }
 }
 
 task MakeJoinedRawCallsDB {
@@ -348,7 +343,7 @@ task DetermineOutlierSamples {
   runtime {
     memory: '~{mem_gb} GB'
     cpu: 1
-    bootDiskSizeGb: 15
+    bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
     preemptible: 1
     maxRetries: 1
@@ -386,9 +381,9 @@ task DetermineOutlierVariants {
   ])
 
   Int disk_size_gb = ceil(
-    size(clusterbatch_vcfs, "GB")
-    + size(concordance_vcf, "GB")
-    + size(joined_raw_calls_db, "GB")
+    size(clusterbatch_vcfs, 'GB')
+    + size(concordance_vcf, 'GB')
+    + size(joined_raw_calls_db, 'GB')
     + 16.0
   )
 
@@ -525,7 +520,7 @@ task ReformatConcordanceVCF {
   }
 }
 
-task FlagOutlierVariants {
+task FlagOutlierVariantsStep0 {
   input {
     File reformatted_concordance_vcf
     File reformatted_concordance_vcf_index
@@ -543,7 +538,7 @@ task FlagOutlierVariants {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(reformatted_concordance_vcf, "GB") * 5.0 + 8.0)
+  Int disk_size_gb = ceil(size(reformatted_concordance_vcf, 'GB') * 5.0 + 8.0)
 
   runtime {
     memory: '4 GB'
@@ -577,131 +572,152 @@ task FlagOutlierVariants {
 
     python3 '~{final_update_outlier_discovery_flag_script}' \
       -i '~{cohort_prefix}_outlier_flagged.vcf.gz' \
-      -o '~{cohort_prefix}_outliers_flagged_FINAL.vcf.gz' \
+      -o '~{cohort_prefix}_outliers_flagged_step0.vcf.gz' \
       -f '~{cohort_prefix}_outlier_size_range_filtered_variants'
-    tabix ~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz
+    tabix '~{cohort_prefix}_outlier_flagged_step0.vcf.gz'
   >>>
 
   output {
-    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz'
-    File outlier_flagged_vcf_index= '~{cohort_prefix}_outlier_flagged_FINAL.vcf.gz.tbi'
+    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_step0.vcf.gz'
+    File outlier_flagged_vcf_index= '~{cohort_prefix}_outlier_flagged_step0.vcf.gz.tbi'
   }
 }
 
-task Outlier_size_range_outlier_discovery_flagging {
-    input {
-        File outlier_discovery_flagging_in_size_range_vcf
-        File outlier_discovery_flagging_in_size_range_vcf_index
-        File flag_outlier_variants_based_on_size_range_counts_script
-        File proportion_of_outlier_samples_associated_with_variant_script
-        File outlier_samples_file
-        String cohort_prefix
-        Int disk_size_gb
-        String svtype
-        Int svtype_size_range_lower_cutoff
-        Int svtype_size_range_higher_cutoff
-        Float fraction_of_outlier_samples
-        String docker
-        Int machine_mem_mb
-    }
+task FlagOutlierVariantsStep1 {
+  input {
+    File step0_outlier_flagged_vcf
+    File step0_outlier_flagged_vcf_index
+    String cohort_prefix
+    File outlier_samples
+    String svtype
+    Int min_svlen
+    Int max_svlen
+    Float fraction_of_outlier_samples
 
-    command <<<
-        set -euo pipefail
+    File flag_outlier_variants_based_on_size_range_counts_script
+    File proportion_of_outlier_samples_associated_with_variant_script
 
-        svtk vcf2bed --include-filters -i ALL ~{outlier_discovery_flagging_in_size_range_vcf} ~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.bed
+    String runtime_docker
+  }
 
-        awk -F'\t' '$5 == ~{svtype} && ($3 - $2) >= ~{svtype_size_range_lower_cutoff} && ($3 - $2) <= ~{svtype_size_range_higher_cutoff}' ~{cohort_prefix}_filtered_outlier_discovered_flag_added_FINAL.bed > ~{cohort_prefix}_filtered_outlier_discovered_flag_added_to_size_range_outliers_FINAL.bed
+  Int disk_size_gb = ceil(size(step0_outlier_flagged_vcf, 'GB') * 5.0 + 8.0)
 
-        python3 ~{proportion_of_outlier_samples_associated_with_variant_script} -o ~{outlier_samples_file} -i ~{cohort_prefix}_filtered_outlier_discovered_flag_added_to_size_range_outliers_FINAL.bed -out ~{cohort_prefix}_outlier_variants_in_size_range.tsv -f ~{fraction_of_outlier_samples}
+  runtime {
+    memory: '4 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb}  HDD'
+    preemptible: 1
+    maxRetries: 0
+    docker: runtime_docker
+  }
 
-        python3 ~{flag_outlier_variants_based_on_size_range_counts_script} -v ~{cohort_prefix}_outlier_variants_in_size_range.tsv -i ~{outlier_discovery_flagging_in_size_range_vcf} -o ~{cohort_prefix}_all_outlier_variants_flagged_with_outlier_discovered.vcf.gz
+  command <<<
+    set -euo pipefail
 
-        tabix ~{cohort_prefix}_all_outlier_variants_flagged_with_outlier_discovered.vcf.gz
-    >>>
+    svtk vcf2bed --include-filters \
+      -i ALL \
+      '~{step0_outlier_flagged_vcf}' \
+      step0_outlier_flagged.bed
+ 
+    awk -F'\t' '$5 == ~{svtype} && ($3 - $2) >= ~{min_svlen} && ($3 - $2) <= ~{max_svlen}' \
+      step0_outlier_flagged.bed \
+      > step0_outlier_flagged_filtered.bed 
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+~{cohort_prefix}_filtered_outlier_discovered_flag_added_to_size_range_outliers_FINAL.bed
 
-    output {
-        File all_cohort_outlier_variants_flagged_vcf = "~{cohort_prefix}_all_outlier_variants_flagged_with_outlier_discovered.vcf.gz"
-        File all_cohort_outlier_variants_flagged_vcf_index = "~{cohort_prefix}_all_outlier_variants_flagged_with_outlier_discovered.vcf.gz.tbi"
-    }
+    python3 ~{proportion_of_outlier_samples_associated_with_variant_script} \
+      -o '~{outlier_samples}' \
+      -i step0_outlier_flagged_filtered.bed \
+      -out outlier_variants_in_size_range.tsv \
+      -f ~{fraction_of_outlier_samples}
+
+    python3 ~{flag_outlier_variants_based_on_size_range_counts_script} \
+      -v outlier_variants_in_size_range.tsv \
+      '~{step0_outlier_flagged_vcf}' \
+      -o '~{cohort_prefix}_outlier_flagged_step1.vcf.gz'
+    tabix '~{cohort_prefix}_outlier_flagged_step1.vcf.gz' 
+  >>>
+
+  output {
+    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_step1.vcf.gz'
+    File outlier_flagged_vcf_index = '~{cohort_prefix}_outlier_flagged_step1.vcf.gz.tbi'
+  }
 }
 
-task Remove_outlier_samples {
-    input {
-        File final_flagged_vcf
-        File final_flagged_vcf_index
-        File outlier_samples_list
-        String cohort_prefix
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
+task RemoveOutlierSamples {
+  input {
+    File final_flagged_vcf
+    File final_flagged_vcf_index
+    File outlier_samples
+    String cohort_prefix
 
-    command <<<
-        set -euo pipefail
+    String runtime_docker
+  }
 
-        bcftools view -c 1 --samples-file ^~{outlier_samples_list} -o ~{cohort_prefix}_FINAL_outlier_samples_removed.vcf.gz -O z ~{final_flagged_vcf}
-        tabix ~{cohort_prefix}_FINAL_outlier_samples_removed.vcf.gz
-    >>>
+  Int disk_size_gb = ceil(size(final_flagged_vcf, 'GB') + 8.0)
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+  runtime {
+    memory: '1 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb} HDD'
+    preemptible: 1
+    maxRetries: 1
+    docker: runtime_docker
+  }
 
-    output {
-        File outlier_samples_removed_vcf = "~{cohort_prefix}_FINAL_outlier_samples_removed.vcf.gz"
-        File outlier_samples_removed_vcf_index = "~{cohort_prefix}_FINAL_outlier_samples_removed.vcf.gz.tbi"
-    }
+  command <<<
+    set -euo pipefail
+
+    bcftools view \
+      -c 1
+      --samples-file ^~{outlier_samples} \
+      -o '~{cohort_prefix}_outliers_removed.vcf.gz' \
+      -O z \
+      '~{final_flagged_vcf}'
+    tabix '~{cohort_prefix}_outliers_removed.vcf.gz'
+  >>>
+
+  output {
+    File outliers_removed_vcf = '~{cohort_prefix}_outliers_removed.vcf.gz'
+    File outliers_removed_vcf_index = '~{cohort_prefix}_outliers_removed.vcf.gz.tbi'
+  }
 }
 
 task ApplyManualFilter {
-    input {
-        String cohort_prefix
-        File vcf
-        File? vcf_index
-        String filter_name
-        String bcftools_filter
-        Int disk_size_gb
-        String docker
-        Int machine_mem_mb
-    }
+  input {
+    String cohort_prefix
+    File vcf
+    File vcf_index
+    String filter_name
+    String bcftools_filter
 
-    String hard_filtered_vcf_name = "~{cohort_prefix}.~{filter_name}.vcf.gz"
+    String runtime_docker
+  }
 
-    command <<<
-        set -euo pipefail
+  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0 + 8.0)
 
-        bcftools view -e '~{bcftools_filter}' ~{vcf} -Oz -o "~{hard_filtered_vcf_name}"
+  runtime {
+    memory: '1 GB'
+    cpu: 1
+    bootDiskSizeGb: 16
+    disks: 'local-disk ${disk_size_gb} HDD'
+    preemptible: 1
+    maxRetries: 1
+    docker: runtime_docker
+  }
 
-        tabix "~{hard_filtered_vcf_name}"
-    >>>
+  command <<<
+    set -euo pipefail
 
-    runtime {
-        memory: "~{machine_mem_mb} MiB"
-        cpu: "1"
-        bootDiskSizeGb: 15
-        disks: "local-disk " + disk_size_gb + " HDD"
-        preemptible: 1
-        docker: docker
-    }
+    bcftools view -e '~{bcftools_filter}' ~{vcf} -Oz \
+      -o '~{cohort_prefix}.~{filter_name}.vcf.gz'
+    tabix '~{cohort_prefix}.~{filter_name}.vcf.gz'
+  >>>
 
-    output {
-        File hard_filtered_vcf = "~{hard_filtered_vcf_name}"
-        File hard_filtered_vcf_index = "~{hard_filtered_vcf_name}.tbi"
-    }
+  output {
+    File hard_filtered_vcf = '~{cohort_prefix}.~{filter_name}.vcf.gz'
+    File hard_filtered_vcf_index = '~{cohort_prefix}.~{filter_name}.vcf.gz.tbi'
+  }
 }
-
-
