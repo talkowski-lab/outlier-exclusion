@@ -11,8 +11,7 @@ workflow OutlierExclusion {
     String bcftools_docker
 
     # CountSVsPerGenome -------------------------------------------------------
-    Int countsvs_min_svlen
-    Int countsvs_max_svlen
+    File count_svs_script
     String linux_docker
 
     # DetermineOutlierSamples -------------------------------------------------
@@ -65,10 +64,9 @@ workflow OutlierExclusion {
 
   call CountSVsPerGenome {
     input:
-      svtype = countsvs_svtype,
-      min_svlen = countsvs_min_svlen,
-      max_svlen = countsvs_max_svlen,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
+      svtypes_to_filter = svtypes_to_filter,
+      count_svs_script = count_svs_script,
       duckdb_zip = duckdb_zip,
       runtime_docker = linux_docker
   }
@@ -200,26 +198,18 @@ task MakeJoinedRawCallsDB {
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
 
-    ./duckdb joined_raw_calls_db.duckdb > svtypes.list << EOF
-    CREATE TABLE joined_raw_calls_svlens (
-        vid VARCHAR,
-        svtype VARCHAR,
-        svlen INTEGER,
-        sample VARCHAR
-    );
-    CREATE TABLE joined_raw_calls_clusters (
-        vid VARCHAR,
-        member VARCHAR
-    );
-    CREATE TABLE filters (svtype VARCHAR, max_svlen DOUBLE, min_svlen DOUBLE);
-    COPY filters FROM '~{write_lines(svtypes_to_filter)}' (
-        FORMAT CSV,
-        DELIMITER ';',
-        HEADER false
-    );
+    ./duckdb > svtypes.list << 'EOF'
     .mode tabs
     .header off
-    SELECT DISTINCT(svtype) FROM svs;
+    SELECT DISTINCT(svtype)
+    FROM read_csv('~{write_lines(svtypes_to_filter)}',
+        delim = ';',
+        header = false,
+        columns = {
+            'svtype': 'VARCHAR',
+            'min_svlen': 'DOUBLE',
+            'max_svlen': 'DOUBLE'
+        });
     EOF
      
     bcftools filter \
@@ -240,6 +230,16 @@ task MakeJoinedRawCallsDB {
       > joined_raw_calls_clusters.tsv
 
     ./duckdb joined_raw_calls.duckdb << 'EOF'
+    CREATE TABLE joined_raw_calls_svlens (
+        vid VARCHAR,
+        svtype VARCHAR,
+        svlen INTEGER,
+        sample VARCHAR
+    );
+    CREATE TABLE joined_raw_calls_clusters (
+        vid VARCHAR,
+        member VARCHAR
+    );
     COPY joined_raw_calls_svlens
     FROM 'joined_raw_calls_svlens.tsv' (
         FORMAT CSV,
@@ -262,10 +262,9 @@ task MakeJoinedRawCallsDB {
 
 task CountSVsPerGenome {
   input {
-    Int min_svlen
-    Int max_svlen
     File joined_raw_calls_db
-
+    Array[String] svtypes_to_filter
+    File count_svs_script
     File duckdb_zip
 
     String runtime_docker
@@ -291,37 +290,41 @@ task CountSVsPerGenome {
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
 
-    ./duckdb '~{joined_raw_calls_db}' << 'EOF'
-    COPY
-    (SELECT sample, svtype, COUNT(*) AS count
-    FROM joined_raw_calls_svlens
-    GROUP BY sample, svtype)
-    TO 'joined_raw_calls_svcounts_ALL.tsv'
-    (DELIMITER '\t', HEADER true);
+    ./duckdb sv_counts.duckdb << 'EOF'
+    CREATE TABLE sv_filters (
+        svtype VARCHAR,
+        min_svlen DOUBLE,
+        max_svlen DOUBLE
+    );
+    COPY sv_filters
+    FROM '~{write_line(svtypes_to_filter)}' (
+        FORMAT CSV,
+        DELIMITER ';',
+        HEADER false
+    );
+    CREATE SEQUENCE id_sequence START 1;
+    ALTER TABLE sv_filters ADD COLUMN id INTEGER DEFAULT nextval('id_sequence');
 
-    PREPARE query_svtype AS
-    SELECT sample, COUNT(*) AS count
-    FROM joined_raw_calls_svlens
-    WHERE svtype = ? AND svlen >= ? AND svlen <= ?
-    GROUP BY sample;
-
-    .mode tabs
-    .once 'joined_raw_calls_svcount_~{svtype}.tsv'
-    EXECUTE query_svtype('~{svtype}', ~{min_svlen}, ~{max_svlen});
+    UPDATE sv_filters
+    SET min_svlen = trunc(min_svlen)
+    WHERE min_svlen isfinite(min_svlen);
+    UPDATE sv_filters
+    SET max_svlen = trunc(max_svlen)
+    WHERE max_svlen isfinite(max_svlen);
     EOF
+
+    python3 '~{count_svs_script}' sv_counts.duckdb '~{joined_raw_calls_db}'
   >>>
 
   output {
-    File sv_counts_per_genome_all = 'joined_raw_calls_svcounts_ALL.tsv'
-    File sv_counts_per_genome_filtered = 'joined_raw_calls_svcount_~{svtype}.tsv'
+    File sv_counts_db = 'sv_counts.duckdb'
   }
 }
 
 task DetermineOutlierSamples {
   input {
     String cohort_prefix
-    File sv_counts_per_genome_all
-    File sv_counts_per_genome_filtered
+    File sv_counts_db
     File wgd_scores
     Float min_wgd_score
     Float max_wgd_score
