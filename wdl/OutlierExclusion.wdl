@@ -214,7 +214,7 @@ task MakeJoinedRawCallsDB {
      
     bcftools filter \
       --include 'INFO/SVTYPE=@svtypes.list' \
-      --output-type u
+      --output-type b
       --output filtered.bcf \
       '~{joined_raw_calls_vcf}'
 
@@ -307,10 +307,10 @@ task CountSVsPerGenome {
 
     UPDATE sv_filters
     SET min_svlen = trunc(min_svlen)
-    WHERE min_svlen isfinite(min_svlen);
+    WHERE isfinite(min_svlen);
     UPDATE sv_filters
     SET max_svlen = trunc(max_svlen)
-    WHERE max_svlen isfinite(max_svlen);
+    WHERE isfinite(max_svlen);
     EOF
 
     python3 '~{count_svs_script}' sv_counts.duckdb '~{joined_raw_calls_db}'
@@ -326,9 +326,9 @@ task DetermineOutlierSamples {
     String cohort_prefix
     File sv_counts_db
     File wgd_scores
-    Float min_wgd_score
-    Float max_wgd_score
-    Int iqr_multiplier
+    Float min_wgd_score = -0.2
+    Float max_wgd_score = 0.2
+    Float iqr_multiplier = 8.0
 
     File determine_outlier_samples_script
 
