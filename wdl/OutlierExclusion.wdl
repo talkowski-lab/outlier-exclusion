@@ -8,20 +8,18 @@ workflow OutlierExclusion {
     File joined_raw_calls_vcf_index
     Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
     File duckdb_zip = 'https://github.com/duckdb/duckdb/releases/download/v1.1.1/duckdb_cli-linux-amd64.zip'
-    String bcftools_docker
+    String docker
 
     # CountSVsPerGenome -------------------------------------------------------
     File count_svs_script
-    String linux_docker
 
     # DetermineOutlierSamples -------------------------------------------------
     String cohort_prefix
     File wgd_scores
     File determine_outlier_samples_script
-    Float min_wgd_score
-    Float max_wgd_score
-    Int iqr_multiplier
-    String svtk_docker
+    Float min_wgd_score = -0.2
+    Float max_wgd_score = 0.2
+    Float iqr_multiplier = 8.0
 
     # DetermineOutlierVariants ------------------------------------------------
     Array[File] clustered_depth_vcfs
@@ -326,34 +324,34 @@ task DetermineOutlierSamples {
     String cohort_prefix
     File sv_counts_db
     File wgd_scores
-    Float min_wgd_score = -0.2
-    Float max_wgd_score = 0.2
-    Float iqr_multiplier = 8.0
+    Float min_wgd_score
+    Float max_wgd_score
+    Float iqr_multiplier
 
     File determine_outlier_samples_script
 
     String runtime_docker
   }
 
-  Float input_size = size([sv_counts_per_genome_all, sv_counts_per_genome_filtered, wgd_scores], 'GB')
-  Int mem_gb = ceil(input_size * 1.2)
-  Int disk_size_gb = ceil(input_size * 1.3) + 8
+  Float input_size = size([sv_counts_db, wgd_scores], 'GB')
+  Int disk_size_gb = ceil(input_size * 1.5) + 8
 
   command <<<
     set -euo pipefail
 
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
+
     python3 '~{determine_outlier_samples_script}' \
-      -s '~{sv_counts_per_genome_all}' \
-      -r '~{sv_counts_per_genome_filtered}'
-      -i ~{iqr_multiplier} \
-      -w '~{wgd_scores}' \
-      -l '~{min_wgd_score}' \
-      -hi '~{max_wgd_score}' \
-      -o '~{cohort_prefix}_outlier_sample.list'
+      '~{sv_counts_db}' \
+      '~{iqr_multiplier}' \
+      '~{wgd_scores}' \
+      '~{min_wgd_score}' \
+      '~{max_wgd_score}'
   >>>
 
   runtime {
-    memory: '~{mem_gb} GB'
+    memory: '4 GB'
     cpu: 1
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
@@ -363,14 +361,14 @@ task DetermineOutlierSamples {
   }
 
   output {
-    File outlier_samples = '~{cohort_prefix}_outlier_sample.list'
+    File sv_counts_db = 'sv_counts_db'
   }
 }
 
 task DetermineOutlierVariants {
   input {
     String cohort_prefix
-    File outlier_samples
+    File sv_counts_db
     Array[File] clustered_depth_vcfs
     Array[File] clustered_manta_vcfs
     Array[File] clustered_wham_vcfs
@@ -417,24 +415,10 @@ task DetermineOutlierVariants {
     unzip '~{duckdb_zip}'
     chmod u+x ./duckdb
 
-    ./duckdb outlier_samples.duckdb << 'EOF'
-    CREATE TABLE outlier_samples (
-        sample VARCHAR
-    );
+    mkdir clusterbatch_vcfs
+    while read -r vcf; do
 
-    COPY outlier_samples
-    FROM '~{outlier_samples}' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
-
-    CREATE TABLE variants (
-        vid VARCHAR,
-        sample VARCHAR
-    );
-    EOF
-
+    don < '~{write_lines(cluster
     while read -r vcf; do
       bcftools query --include 'GT ~ "1"' \
         --format '[%ID\t%SAMPLE\n]' \
