@@ -6,12 +6,12 @@ workflow OutlierExclusion {
     # MakeJoinedRawCallsDB ------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
     File duckdb_zip = 'https://github.com/duckdb/duckdb/releases/download/v1.1.1/duckdb_cli-linux-amd64.zip'
     String docker
 
     # CountSVsPerGenome -------------------------------------------------------
     File count_svs_script
+    Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
 
     # DetermineOutlierSamples -------------------------------------------------
     String cohort_prefix
@@ -30,8 +30,10 @@ workflow OutlierExclusion {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
+    File determine_outlier_variants_script
     File concordance_vcf
     File concordance_vcf_index
+    Float min_outlier_sample_prop = 1.0
 
     # ReformatConcordanceVCF --------------------------------------------------
     File reformat_vcf_header_script
@@ -55,7 +57,6 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
-      svtypes_to_filter = svtypes_to_filter,
       duckdb_zip = duckdb_zip,
       runtime_docker = bcftools_docker
   }
@@ -71,9 +72,7 @@ workflow OutlierExclusion {
 
   call DetermineOutlierSamples {
     input:
-      cohort_prefix = cohort_prefix,
-      sv_counts_per_genome_all = CountSVsPerGenome.sv_counts_per_genome_all,
-      sv_counts_per_genome_filtered = CountSVsPerGenome.sv_counts_per_genome_filtered,
+      sv_counts_db = CountSVsPerGenome.sv_counts_db,
       wgd_scores = wgd_scores,
       min_wgd_score = min_wgd_score,
       max_wgd_score = max_wgd_score,
@@ -84,8 +83,7 @@ workflow OutlierExclusion {
 
   call DetermineOutlierVariants {
     input:
-      cohort_prefix = cohort_prefix,
-      outlier_samples = DetermineOutlierSamples.outlier_samples,
+      outlier_samples = DetermineOutlierSamples.sv_counts_db,
       clustered_depth_vcfs = clustered_depth_vcfs,
       clustered_manta_vcfs = clustered_manta_vcfs,
       clustered_wham_vcfs = clustered_wham_vcfs,
@@ -170,9 +168,8 @@ task MakeJoinedRawCallsDB {
   input {
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    Array[String] svtypes_to_filter
-    File duckdb_zip
 
+    File duckdb_zip
     String runtime_docker
   }
 
@@ -193,33 +190,11 @@ task MakeJoinedRawCallsDB {
     set -o nounset
     set -o pipefail
 
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
-
-    ./duckdb > svtypes.list << 'EOF'
-    .mode tabs
-    .header off
-    SELECT DISTINCT(svtype)
-    FROM read_csv('~{write_lines(svtypes_to_filter)}',
-        delim = ';',
-        header = false,
-        columns = {
-            'svtype': 'VARCHAR',
-            'min_svlen': 'DOUBLE',
-            'max_svlen': 'DOUBLE'
-        });
-    EOF
-     
-    bcftools filter \
-      --include 'INFO/SVTYPE=@svtypes.list' \
-      --output-type b
-      --output filtered.bcf \
-      '~{joined_raw_calls_vcf}'
-
     bcftools query \
-      --include 'GT ~ "1"' \
+      --include 'GT ~ "1" & INFO/SVLEN > 0' \
       --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
-      filtered.bcf > joined_raw_calls_svlens.tsv
+      '~{joined_raw_calls_vcf}' \
+      | awk -F'\t' '$2 ~ /^INS/{$2 = "INS"; print}' OFS='\t' > joined_raw_calls_svlens.tsv
 
     bcftools query \
       --format '%ID\t%INFO/MEMBERS\n' \
@@ -227,6 +202,9 @@ task MakeJoinedRawCallsDB {
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
       > joined_raw_calls_clusters.tsv
 
+    unzip '~{duckdb_zip}'
+    chmod u+x ./duckdb
+     
     ./duckdb joined_raw_calls.duckdb << 'EOF'
     CREATE TABLE joined_raw_calls_svlens (
         vid VARCHAR,
@@ -263,8 +241,8 @@ task CountSVsPerGenome {
     File joined_raw_calls_db
     Array[String] svtypes_to_filter
     File count_svs_script
-    File duckdb_zip
 
+    File duckdb_zip
     String runtime_docker
   }
 
@@ -321,7 +299,6 @@ task CountSVsPerGenome {
 
 task DetermineOutlierSamples {
   input {
-    String cohort_prefix
     File sv_counts_db
     File wgd_scores
     Float min_wgd_score
@@ -338,9 +315,6 @@ task DetermineOutlierSamples {
 
   command <<<
     set -euo pipefail
-
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
 
     python3 '~{determine_outlier_samples_script}' \
       '~{sv_counts_db}' \
@@ -367,8 +341,6 @@ task DetermineOutlierSamples {
 
 task DetermineOutlierVariants {
   input {
-    String cohort_prefix
-    File sv_counts_db
     Array[File] clustered_depth_vcfs
     Array[File] clustered_manta_vcfs
     Array[File] clustered_wham_vcfs
@@ -379,7 +351,11 @@ task DetermineOutlierVariants {
     Array[File] clustered_melt_vcf_indicies
     File concordance_vcf
     File concordance_vcf_index
+    File sv_counts_db
     File joined_raw_calls_db
+    Float min_outlier_sample_prop
+
+    File determine_outlier_variants_script
 
     File duckdb_zip
     String runtime_docker
@@ -389,9 +365,13 @@ task DetermineOutlierVariants {
     clustered_depth_vcfs, clustered_manta_vcfs, clustered_wham_vcfs,
     clustered_melt_vcfs
   ])
+  Array[File] clusterbatch_vcf_indicies = flatten([
+    clustered_depth_vcf_indicies, clustered_manta_vcf_indicies, clustered_wham_vcf_indicies,
+    clustered_melt_vcf_indicies
+  ])
 
   Int disk_size_gb = ceil(
-    size(clusterbatch_vcfs, 'GB')
+    size(clusterbatch_vcfs, 'GB') * 2.0
     + size(concordance_vcf, 'GB')
     + size(joined_raw_calls_db, 'GB')
     + 16.0
@@ -416,89 +396,60 @@ task DetermineOutlierVariants {
     chmod u+x ./duckdb
 
     mkdir clusterbatch_vcfs
-    while read -r vcf; do
+    cat '~{clusterbatch_vcfs}' '~{clusterbatch_vcf_indicies}' | while read -r vcf; do
+      mv -t clusterbatch_vcfs "${vcf}" 
+    done
 
-    don < '~{write_lines(cluster
-    while read -r vcf; do
-      bcftools query --include 'GT ~ "1"' \
-        --format '[%ID\t%SAMPLE\n]' \
-        "${vcf}"
-    done < '~{write_lines(clusterbatch_vcfs)}' \
-      | ./duckdb outliers_samples.duckdb "COPY variants FROM '/dev/stdin' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+    find clusterbatch_vcfs -name '*.vcf.gz' -print \
+      | awk -F'/' '{bn=$NF; sub(/\.cluster_batch\.(depth|wham|manta|melt)\.vcf.gz$/, "", bn); print bn}' \
+      | sort -u > clusterbatch_ids.list
 
-    ./duckdb outliers_samples.duckdb > clusterbatch_outliers.list << 'EOF'
-    .mode tabs
-    SELECT vid
-    FROM (
-        SELECT l.vid AS vid, COUNT(*) FILTER(r.sample IS NULL) AS nils
-        FROM variants l
-        LEFT JOIN outlier_samples r
-        USING (sample)
-        GROUP BY vid
-    )
-    WHERE nils = 0;
+    mkdir clusterbatch_dbs
+    cat > reformat.bash << 'EOF'
+    tsv="clusterbatch_dbs/${1}_variants.tsv"
+    . > "${tsv}"
+    rm -f -- "${db}"
+    ./duckdb "${db}" 'CREATE TABLE variants (vid VARCHAR, sample VARCHAR);'
+    find clusterbatch_vcfs -name "${1}.*.vcf.gz" \
+      -exec bcftools query --include 'GT ~ "1"' --format '[%ID\t%SAMPLE\n]' '{}' \; \
+      >> "${tsv}"
+    ./duckdb "${db}" "COPY variants FROM '${tsv}' (FORMAT CSV, HEADER false, DELIMITER '\t');"
     EOF
+    chmod u+x reformat.bash
+    xargs -L 1 -P 0 -- ./reformat.bash < clusterbatch_ids.list
 
-    ./duckdb '~{joined_raw_calls_db}' > 'joined_raw_calls_outliers.list' << 'EOF'
-    CREATE TEMP TABLE t1 (
-        vid VARCHAR
-    );
-
-    COPY t1
-    FROM 'clusterbatch_outliers.list' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
-
-    .mode tabs
-    .header off
-    SELECT jrc.vid
-    FROM joined_raw_calls_clusters jrc
-    JOIN t1 ON (jrc.member = t1.vid)
-    ORDER BY jrc.vid ASC;
-    EOF
+    python3 '~{determine_outlier_variants_script}' \
+      '~{sv_counts_db}' \
+      '~{joined_raw_calls_db}' \
+      clusterbatch_dbs \
+      '~{min_outlier_sample_prop}' \
+      LC_ALL=C sort -u > joined_raw_calls_outlier_variants.list
 
     bcftools query --include 'INFO/TRUTH_VID != ""' \
-      --format '%ID\t%INFO/TRUTH_VID\n' \
+      --format '%CHROM\t%POS%ID\t%INFO/TRUTH_VID\n' \
       '~{concordance_vcf}' \
-      | LC_ALL=C sort -k2,2 > concordance_vids.tsv
-    LC_ALL=C join -1 2 -2 1 -o 1.1 \
+      | LC_ALL=C sort -k4,4 > concordance_vids.tsv
+    LC_ALL=C join -1 4 -2 1 -o 1.1,1.2,1.3 -t $'\t' \
       concordance_vids.tsv \
-      joined_raw_calls_outliers.list > '~{cohort_prefix}_concordance_calls_outlier_vids.list'
+      joined_raw_calls_outliers_variants.list > 'concordance_calls_outlier_vids.tsv'
   >>>
 
   output {
-    File outlier_variants = '${cohort_prefix}_concordance_calls_outlier_vids.list'
+    File outlier_variants = 'concordance_calls_outlier_vids.tsv'
   }
 }
 
-task ReformatConcordanceVCF {
+task FlagOutlierVariants {
   input {
     String cohort_prefix
     File concordance_vcf
     File concordance_vcf_index
-    File reformat_vcf_header_script
+    File outlier_variants
 
     String runtime_docker
   }
 
   Int disk_size_gb = ceil(size(concordance_vcf) * 2.0 + 8.0)
-  command <<<
-    set -euo pipefail
-
-    bcftools view -h '~{concordance_vcf}' \
-      | grep '##FILTER' > concordance_header.txt
-
-    echo '##FILTER=<ID=outlier_discovered,Description="Variant with only outlier samples associated">' >> concordance_header.txt
-
-    python3 '~{reformat_vcf_header_script}' \
-      -i '~{concordance_vcf}' \
-      -hf concordance_header.txt \
-      -o '~{cohort_prefix}_reformatted_concordance.vcf.gz'
-
-    tabix -f '~{cohort_prefix}_reformatted_concordance.vcf.gz'
-  >>>
 
   runtime {
     memory: '2 GB'
@@ -510,174 +461,26 @@ task ReformatConcordanceVCF {
     docker: runtime_docker
   }
 
-  output {
-    File reformatted_concordance_vcf = '~{cohort_prefix}_reformatted_concordance.vcf.gz'
-    File reformatted_concordance_vcf_index = '~{cohort_prefix}_reformatted_concordance.vcf.gz.tbi'
-  }
-}
-
-task FlagOutlierVariantsStep0 {
-  input {
-    File reformatted_concordance_vcf
-    File reformatted_concordance_vcf_index
-    File concordance_outlier_variants
-    String cohort_prefix
-    File outlier_samples
-    Int min_svlen
-    Int max_svlen
-    String svtype
-
-    File update_outlier_discovery_flag_script
-    File outlier_size_range_variants_script
-    File final_update_outlier_discovery_flag_script
-
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(reformatted_concordance_vcf, 'GB') * 5.0 + 8.0)
-
-  runtime {
-    memory: '4 GB'
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 1
-    docker: runtime_docker
-  }
-
   command <<<
-    set -euo pipefail
+    set -o errexit
+    set -o nounset
+    set -o pipefail
 
-    python3 '~{update_outlier_discovery_flag_script}' \
-      -i '~{reformatted_concordance_vcf}' \
-      -v '~{concordance_outlier_variants}' \
-      -o '~{cohort_prefix}_outlier_flagged.vcf.gz'
-    tabix '~{cohort_prefix}_outlier_flagged.vcf.gz'
+    awk -F'\t' '{print $0"\toutlier"}' '~{outlier_variants}' > annotations.tsv
 
-    svtk vcf2bed --include-filters -i ALL \
-      '~{cohort_prefix}_outlier_flagged.vcf.gz' \
-      '~{cohort_prefix}_outlier_flagged.bed'
-
-    python3 '~{outlier_size_range_variants_script}' \
-      -o '~{outlier_samples}' \
-      -i '~{cohort_prefix}_outlier_flagged.bed' \
-      -out '~{cohort_prefix}_outlier_size_range_filtered_variants' \
-      -t '~{svtype}' \
-      -l ~{min_svlen}
-      -hi ~{max_svlen}
-
-    python3 '~{final_update_outlier_discovery_flag_script}' \
-      -i '~{cohort_prefix}_outlier_flagged.vcf.gz' \
-      -o '~{cohort_prefix}_outliers_flagged_step0.vcf.gz' \
-      -f '~{cohort_prefix}_outlier_size_range_filtered_variants'
-    tabix '~{cohort_prefix}_outlier_flagged_step0.vcf.gz'
+    bcftools annotate \
+      --annotations annotations.tsv \
+      --columns 'CHROM,POS,~ID,.FILTER' \
+      --header-lines '##FILTER=<ID=outlier,Description="Variant enriched by outlier samples">' \
+      --output '~{cohort_prefix}_outliers_annotated_concordance.vcf.gz' \
+      --output-type z \
+      --write-index=tbi \
+      '~{concordance_vcf}'
   >>>
 
   output {
-    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_step0.vcf.gz'
-    File outlier_flagged_vcf_index= '~{cohort_prefix}_outlier_flagged_step0.vcf.gz.tbi'
-  }
-}
-
-task FlagOutlierVariantsStep1 {
-  input {
-    File step0_outlier_flagged_vcf
-    File step0_outlier_flagged_vcf_index
-    String cohort_prefix
-    File outlier_samples
-    String svtype
-    Int min_svlen
-    Int max_svlen
-    Float fraction_of_outlier_samples
-
-    File flag_outlier_variants_based_on_size_range_counts_script
-    File proportion_of_outlier_samples_associated_with_variant_script
-
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(step0_outlier_flagged_vcf, 'GB') * 5.0 + 8.0)
-
-  runtime {
-    memory: '4 GB'
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb}  HDD'
-    preemptible: 1
-    maxRetries: 0
-    docker: runtime_docker
-  }
-
-  command <<<
-    set -euo pipefail
-
-    svtk vcf2bed --include-filters \
-      -i ALL \
-      '~{step0_outlier_flagged_vcf}' \
-      step0_outlier_flagged.bed
- 
-    awk -F'\t' '$5 == ~{svtype} && ($3 - $2) >= ~{min_svlen} && ($3 - $2) <= ~{max_svlen}' \
-      step0_outlier_flagged.bed \
-      > step0_outlier_flagged_filtered.bed 
-
-~{cohort_prefix}_filtered_outlier_discovered_flag_added_to_size_range_outliers_FINAL.bed
-
-    python3 ~{proportion_of_outlier_samples_associated_with_variant_script} \
-      -o '~{outlier_samples}' \
-      -i step0_outlier_flagged_filtered.bed \
-      -out outlier_variants_in_size_range.tsv \
-      -f ~{fraction_of_outlier_samples}
-
-    python3 ~{flag_outlier_variants_based_on_size_range_counts_script} \
-      -v outlier_variants_in_size_range.tsv \
-      '~{step0_outlier_flagged_vcf}' \
-      -o '~{cohort_prefix}_outlier_flagged_step1.vcf.gz'
-    tabix '~{cohort_prefix}_outlier_flagged_step1.vcf.gz' 
-  >>>
-
-  output {
-    File outlier_flagged_vcf = '~{cohort_prefix}_outlier_flagged_step1.vcf.gz'
-    File outlier_flagged_vcf_index = '~{cohort_prefix}_outlier_flagged_step1.vcf.gz.tbi'
-  }
-}
-
-task RemoveOutlierSamples {
-  input {
-    File final_flagged_vcf
-    File final_flagged_vcf_index
-    File outlier_samples
-    String cohort_prefix
-
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(final_flagged_vcf, 'GB') + 8.0)
-
-  runtime {
-    memory: '1 GB'
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 1
-    maxRetries: 1
-    docker: runtime_docker
-  }
-
-  command <<<
-    set -euo pipefail
-
-    bcftools view \
-      -c 1
-      --samples-file ^~{outlier_samples} \
-      -o '~{cohort_prefix}_outliers_removed.vcf.gz' \
-      -O z \
-      '~{final_flagged_vcf}'
-    tabix '~{cohort_prefix}_outliers_removed.vcf.gz'
-  >>>
-
-  output {
-    File outliers_removed_vcf = '~{cohort_prefix}_outliers_removed.vcf.gz'
-    File outliers_removed_vcf_index = '~{cohort_prefix}_outliers_removed.vcf.gz.tbi'
+    File outlier_annotated_vcf = '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz'
+    File outlier_annotated_vcf_index = '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz.tbi'
   }
 }
 
