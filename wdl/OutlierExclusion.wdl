@@ -14,7 +14,6 @@ workflow OutlierExclusion {
     Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
 
     # DetermineOutlierSamples -------------------------------------------------
-    String cohort_prefix
     File wgd_scores
     File determine_outlier_samples_script
     Float min_wgd_score = -0.2
@@ -35,22 +34,12 @@ workflow OutlierExclusion {
     File concordance_vcf_index
     Float min_outlier_sample_prop = 1.0
 
-    # ReformatConcordanceVCF --------------------------------------------------
-    File reformat_vcf_header_script
-
-    # FlagOutlierVariantsStep0 ------------------------------------------------
-    File update_outlier_discovery_flag_script
-    File outlier_size_range_variants_script
-    File final_update_outlier_discovery_flag_script
-
-    # FlagOutlierVariantsStep1 ------------------------------------------------
-    Float fraction_of_outlier_samples
-    File flag_outlier_variants_based_on_size_range_counts_script
-    File proportion_of_outlier_samples_associated_with_variant_script
+    # FlagOutlierVariants -----------------------------------------------------
+    String cohort_prefix
 
     # ApplyManualFilter -------------------------------------------------------
-    String filter_name
-    String bcftools_filter
+    String filter_name = 'manual_filter'
+    String? bcftools_filter
   }
 
   call MakeJoinedRawCallsDB {
@@ -58,7 +47,7 @@ workflow OutlierExclusion {
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
       duckdb_zip = duckdb_zip,
-      runtime_docker = bcftools_docker
+      runtime_docker = docker
   }
 
   call CountSVsPerGenome {
@@ -67,7 +56,7 @@ workflow OutlierExclusion {
       svtypes_to_filter = svtypes_to_filter,
       count_svs_script = count_svs_script,
       duckdb_zip = duckdb_zip,
-      runtime_docker = linux_docker
+      runtime_docker = docker
   }
 
   call DetermineOutlierSamples {
@@ -78,12 +67,11 @@ workflow OutlierExclusion {
       max_wgd_score = max_wgd_score,
       iqr_multiplier = iqr_multiplier,
       determine_outlier_samples_script = determine_outlier_samples_script,
-      runtime_docker = svtk_docker
+      runtime_docker = docker
   }
 
   call DetermineOutlierVariants {
     input:
-      outlier_samples = DetermineOutlierSamples.sv_counts_db,
       clustered_depth_vcfs = clustered_depth_vcfs,
       clustered_manta_vcfs = clustered_manta_vcfs,
       clustered_wham_vcfs = clustered_wham_vcfs,
@@ -92,75 +80,40 @@ workflow OutlierExclusion {
       clustered_manta_vcf_indicies = clustered_manta_vcf_indicies,
       clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
       clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
+      sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
       concordance_vcf = concordance_vcf,
       concordance_vcf_index = concordance_vcf_index,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       duckdb_zip = duckdb_zip,
-      runtime_docker = bcftools_docker
+      runtime_docker = docker
   }
 
-  call ReformatConcordanceVCF {
+  call FlagOutlierVariants {
     input:
       cohort_prefix = cohort_prefix,
       concordance_vcf = concordance_vcf,
       concordance_vcf_index = concordance_vcf_index,
-      reformat_vcf_header_script = reformat_vcf_header_script,
-      runtime_docker = svtk_docker
+      outlier_variants = DetermineOutlierVariants.outlier_variants,
+      runtime_docker = docker
   }
 
-  call FlagOutlierVariantsStep0 {
-    input:
-      reformatted_concordance_vcf = ReformatConcordanceVCF.reformatted_concordance_vcf,
-      reformatted_concordance_vcf_index = ReformatConcordanceVCF.reformatted_concordance_vcf_index,
-      concordance_outlier_variants = DetermineOutlierVariants.outlier_variants,
-      cohort_prefix = cohort_prefix,
-      outlier_samples = DetermineOutlierSamples.outlier_samples,
-      min_svlen = countsvs_min_svlen,
-      max_svlen = countsvs_max_svlen,
-      svtype = countsvs_svtype,
-      update_outlier_discovery_flag_script = update_outlier_discovery_flag_script,
-      outlier_size_range_variants_script = outlier_size_range_variants_script,
-      final_update_outlier_discovery_flag_script = final_update_outlier_discovery_flag_script,
-      runtime_docker = svtk_docker
-  }
-
-  call FlagOutlierVariantsStep1 {
-    input:
-      step0_outlier_flagged_vcf = FlagOutlierVariantsStep0.outlier_flagged_vcf,
-      step0_outlier_flagged_vcf_index = FlagOutlierVariantsStep0.outlier_flagged_vcf_index,
-      cohort_prefix = cohort_prefix,
-      outlier_samples = DetermineOutlierSamples.outlier_samples,
-      svtype = countsvs_svtype,
-      min_svlen = countsvs_min_svlen,
-      max_svlen = countsvs_max_svlen,
-      fraction_of_outlier_samples = fraction_of_outlier_samples,
-      flag_outlier_variants_based_on_size_range_counts_script = flag_outlier_variants_based_on_size_range_counts_script,
-      proportion_of_outlier_samples_associated_with_variant_script = proportion_of_outlier_samples_associated_with_variant_script,
-      runtime_docker = svtk_docker
-  }
-
-  call RemoveOutlierSamples {
-    input:
-      final_flagged_vcf = FlagOutlierVariantsStep1.outlier_flagged_vcf,
-      final_flagged_vcf_index = FlagOutlierVariantsStep1.outlier_flagged_vcf_index,
-      outlier_samples = DetermineOutlierSamples.outlier_samples,
-      cohort_prefix = cohort_prefix,
-      runtime_docker = bcftools_docker
-  }
-
-  call ApplyManualFilter {
-    input:
-      cohort_prefix = cohort_prefix,
-      vcf = RemoveOutlierSamples.outliers_removed_vcf,
-      vcf_index = RemoveOutlierSamples.outliers_removed_vcf_index,
-      filter_name = filter_name,
-      bcftools_filter = bcftools_filter,
-      runtime_docker = bcftools_docker
+  if (defined(bcftools_filter)) {
+    call ApplyManualFilter {
+      input:
+        cohort_prefix = cohort_prefix,
+        vcf = FlagOutlierVariants.outlier_annotated_vcf,
+        vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index,
+        filter_name = filter_name,
+        bcftools_filter = select_first([bcftools_filter, '']),
+        runtime_docker = docker
+    }
+    File manual_filtered_vcf = ApplyManualFilter.hard_filtered_vcf
+    File manual_filtered_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
   }
 
   output {
-    File manual_filtered_and_flagged_vcf = ApplyManualFilter.hard_filtered_vcf
-    File manual_filtered_and_flagged_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
+    File manual_filtered_and_flagged_vcf = select_first([manual_filtered_vcf, FlagOutlierVariants.outlier_annotated_vcf])
+    File manual_filtered_and_flagged_vcf_index = select_first([manual_filtered_vcf_index, FlagOutlierVariants.outlier_annotated_vcf_index])
   }
 }
 
@@ -273,7 +226,7 @@ task CountSVsPerGenome {
         max_svlen DOUBLE
     );
     COPY sv_filters
-    FROM '~{write_line(svtypes_to_filter)}' (
+    FROM '~{write_lines(svtypes_to_filter)}' (
         FORMAT CSV,
         DELIMITER ';',
         HEADER false
@@ -335,7 +288,7 @@ task DetermineOutlierSamples {
   }
 
   output {
-    File sv_counts_db = 'sv_counts_db'
+    File sv_counts_db_with_outliers = sv_counts_db
   }
 }
 
@@ -435,7 +388,7 @@ task DetermineOutlierVariants {
       '~{joined_raw_calls_db}' \
       clusterbatch_dbs \
       '~{min_outlier_sample_prop}' \
-      LC_ALL=C sort -u > joined_raw_calls_outlier_variants.list
+      | LC_ALL=C sort -u > joined_raw_calls_outlier_variants.list
 
     bcftools query --include 'INFO/TRUTH_VID != ""' \
       --format '%CHROM\t%POS%ID\t%INFO/TRUTH_VID\n' \
@@ -443,11 +396,11 @@ task DetermineOutlierVariants {
       | LC_ALL=C sort -k4,4 > concordance_vids.tsv
     LC_ALL=C join -1 4 -2 1 -o 1.1,1.2,1.3 -t $'\t' \
       concordance_vids.tsv \
-      joined_raw_calls_outliers_variants.list > concordance_calls_outlier_vids.tsv
+      joined_raw_calls_outliers_variants.list > concordance_calls_outliers.tsv
   >>>
 
   output {
-    File outlier_variants = 'concordance_calls_outlier_vids.tsv'
+    File outlier_variants = 'concordance_calls_outliers.tsv'
   }
 }
 
@@ -478,13 +431,19 @@ task FlagOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    awk -F'\t' '{print $0"\toutlier"}' '~{outlier_variants}' > annotations.tsv
+    awk -F'\t' '{print $0"\tOUTLIER"}' '~{outlier_variants}' \
+      | sort -k1,1 -k2,2n > annotations.tsv
+    bgzip annotations.tsv
+    tabix --begin 2 --end 2 --sequence 1 annotations.tsv.gz
+
+    printf '##FILTER=<ID=OUTLIER,Description="Variant enriched by outlier samples">' \
+      > header.txt
 
     bcftools annotate \
-      --annotations annotations.tsv \
+      --annotations annotations.tsv.gz \
       --columns 'CHROM,POS,~ID,.FILTER' \
-      --header-lines '##FILTER=<ID=outlier,Description="Variant enriched by outlier samples">' \
-      --output '~{cohort_prefix}_outliers_annotated_concordance.vcf.gz' \
+      --header-lines header.txt \
+      --output '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz' \
       --output-type z \
       --write-index=tbi \
       '~{concordance_vcf}'
