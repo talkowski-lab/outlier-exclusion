@@ -81,8 +81,6 @@ workflow OutlierExclusion {
       clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
       clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
       sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
-      concordance_vcf = concordance_vcf,
-      concordance_vcf_index = concordance_vcf_index,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       duckdb_zip = duckdb_zip,
       runtime_docker = docker
@@ -302,8 +300,6 @@ task DetermineOutlierVariants {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
-    File concordance_vcf
-    File concordance_vcf_index
     File sv_counts_db
     File joined_raw_calls_db
     Float min_outlier_sample_prop
@@ -325,7 +321,6 @@ task DetermineOutlierVariants {
 
   Int disk_size_gb = ceil(
     size(clusterbatch_vcfs, 'GB') * 2.0
-    + size(concordance_vcf, 'GB')
     + size(joined_raw_calls_db, 'GB')
     + 16.0
   )
@@ -389,18 +384,10 @@ task DetermineOutlierVariants {
       clusterbatch_dbs \
       '~{min_outlier_sample_prop}' \
       | LC_ALL=C sort -u > joined_raw_calls_outlier_variants.list
-
-    bcftools query --include 'INFO/TRUTH_VID != ""' \
-      --format '%CHROM\t%POS%ID\t%INFO/TRUTH_VID\n' \
-      '~{concordance_vcf}' \
-      | LC_ALL=C sort -k4,4 > concordance_vids.tsv
-    LC_ALL=C join -1 4 -2 1 -o 1.1,1.2,1.3 -t $'\t' \
-      concordance_vids.tsv \
-      joined_raw_calls_outliers_variants.list > concordance_calls_outliers.tsv
   >>>
 
   output {
-    File outlier_variants = 'concordance_calls_outliers.tsv'
+    File outlier_variants = 'joined_raw_calls_outliers_variants.list'
   }
 }
 
@@ -431,17 +418,25 @@ task FlagOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    awk -F'\t' '{print $0"\tOUTLIER"}' '~{outlier_variants}' \
+    bcftools query --include 'INFO/TRUTH_VID != ""' \
+      --format '%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO/TRUTH_VID\n' \
+      '~{concordance_vcf}' \
+      | LC_ALL=C sort -k6,6 > concordance_variants.tsv
+    LC_ALL=C join -1 6 -2 1 -o 1.1,1.2,1.3,1.4,1.5 -t $'\t' \
+      concordance_variants.tsv \
+      '~{outlier_variants}' > concordance_calls_outliers.tsv
+
+    awk -F'\t' '{print $0"\toutlier"}' 'concordance_calls_outliers.tsv' \
       | sort -k1,1 -k2,2n > annotations.tsv
     bgzip annotations.tsv
     tabix --begin 2 --end 2 --sequence 1 annotations.tsv.gz
 
-    printf '##FILTER=<ID=OUTLIER,Description="Variant enriched by outlier samples">' \
+    printf '##FILTER=<ID=outlier,Description="Variant enriched by outlier samples">' \
       > header.txt
 
     bcftools annotate \
       --annotations annotations.tsv.gz \
-      --columns 'CHROM,POS,~ID,.FILTER' \
+      --columns 'CHROM,POS,REF,ALT,~ID,.FILTER' \
       --header-lines header.txt \
       --output '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz' \
       --output-type z \
