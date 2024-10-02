@@ -406,17 +406,29 @@ task DetermineOutlierVariants {
 
     mkdir clusterbatch_dbs
     cat > reformat.bash << 'EOF'
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+    query_vcf() {
+      bcftools query --include 'GT ~ "1"' \
+        --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' "$1" >> "$2"
+    }
     tsv="clusterbatch_dbs/${1}_variants.tsv"
-    . > "${tsv}"
+    db="clusterbatch_dbs/${1}_variants.duckdb"
+    : > "${tsv}"
     rm -f -- "${db}"
-    ./duckdb "${db}" 'CREATE TABLE variants (vid VARCHAR, sample VARCHAR);'
-    find clusterbatch_vcfs -name "${1}.*.vcf.gz" \
-      -exec bcftools query --include 'GT ~ "1"' --format '[%ID\t%SAMPLE\n]' '{}' \; \
-      >> "${tsv}"
+    ./duckdb "${db}" 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
+    depth="clusterbatch_vcfs/${1}.cluster_batch.depth.vcf.gz"
+    wham="clusterbatch_vcfs/${1}.cluster_batch.wham.vcf.gz"
+    manta="clusterbatch_vcfs/${1}.cluster_batch.manta.vcf.gz"
+    melt="clusterbatch_vcfs/${1}.cluster_batch.melt.vcf.gz"
+    test -r "${depth}" && query_vcf "${depth}" "${tsv}"
+    test -r "${wham}" && query_vcf "${wham}" "${tsv}"
+    test -r "${manta}" && query_vcf "${manta}" "${tsv}"
+    test -r "${melt}" && query_vcf "${melt}" "${tsv}"
     ./duckdb "${db}" "COPY variants FROM '${tsv}' (FORMAT CSV, HEADER false, DELIMITER '\t');"
     EOF
-    chmod u+x reformat.bash
-    xargs -L 1 -P 0 -- ./reformat.bash < clusterbatch_ids.list
+    xargs -L 1 -P 0 -- bash reformat.bash < clusterbatch_ids.list
 
     python3 '~{determine_outlier_variants_script}' \
       '~{sv_counts_db}' \
@@ -431,7 +443,7 @@ task DetermineOutlierVariants {
       | LC_ALL=C sort -k4,4 > concordance_vids.tsv
     LC_ALL=C join -1 4 -2 1 -o 1.1,1.2,1.3 -t $'\t' \
       concordance_vids.tsv \
-      joined_raw_calls_outliers_variants.list > 'concordance_calls_outlier_vids.tsv'
+      joined_raw_calls_outliers_variants.list > concordance_calls_outlier_vids.tsv
   >>>
 
   output {
