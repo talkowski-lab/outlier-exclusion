@@ -146,7 +146,7 @@ task MakeJoinedRawCallsDB {
 
     bcftools query \
       --format '%ID\t%INFO/MEMBERS\n' \
-      filtered.bcf \
+      '~{joined_raw_calls_vcf}' \
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
       > joined_raw_calls_clusters.tsv
 
