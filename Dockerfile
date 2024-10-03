@@ -1,7 +1,7 @@
 FROM python:3.12.7-bookworm
 
 ARG DUCKDB_VERSION="1.1.1"
-ARG DUCKDB_URI="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
+ARG DUCKDB_URI="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
 ARG BCFTOOLS_VERSION="1.21"
 ARG BCFTOOLS_URI="https://github.com/samtools/bcftools/releases/download/${BCFTOOLS_VERSION}/bcftools-${BCFTOOLS_VERSION}.tar.bz2"
 
