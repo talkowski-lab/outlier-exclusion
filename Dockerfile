@@ -15,9 +15,9 @@ RUN curl -L -o duckdb_cli-linux-amd64.zip "${DUCKDB_URI}" \
 
 RUN curl -L -o bcftools.tar.bz2 "${BCFTOOLS_URI}" \
   && tar -jxf bcftools.tar.bz2 \
-  && pushd "bcftools-${BCFTOOLS_VERSION}" \
+  && cd "bcftools-${BCFTOOLS_VERSION}" \
   && make install \
-  && popd \
+  && cd .. \
   && rm -fr "bcftools-${BCFTOOLS_VERSION}" bcftools.tar.bz2
 
 RUN useradd --shell /bin/bash --create-home docker \
