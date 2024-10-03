@@ -21,7 +21,6 @@ RUN curl -L -o bcftools.tar.bz2 "${BCFTOOLS_URI}" \
   && rm -fr "bcftools-${BCFTOOLS_VERSION}" bcftools.tar.bz2
 
 RUN useradd --shell /bin/bash --create-home docker \
-  && groupadd staff \
   && usermod --gid staff docker
 USER docker
 WORKDIR /home/docker
