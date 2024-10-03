@@ -78,6 +78,8 @@ workflow OutlierExclusion {
       clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
       clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
       sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
+      min_outlier_sample_prop = min_outlier_sample_prop,
+      determine_outlier_variants_script = determine_outlier_variants_script,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       runtime_docker = docker
   }
