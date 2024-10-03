@@ -6,7 +6,6 @@ workflow OutlierExclusion {
     # MakeJoinedRawCallsDB ------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    File duckdb_zip = 'https://github.com/duckdb/duckdb/releases/download/v1.1.1/duckdb_cli-linux-amd64.zip'
     String docker
 
     # CountSVsPerGenome -------------------------------------------------------
@@ -46,7 +45,6 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_vcf = joined_raw_calls_vcf,
       joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
-      duckdb_zip = duckdb_zip,
       runtime_docker = docker
   }
 
@@ -55,7 +53,6 @@ workflow OutlierExclusion {
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       svtypes_to_filter = svtypes_to_filter,
       count_svs_script = count_svs_script,
-      duckdb_zip = duckdb_zip,
       runtime_docker = docker
   }
 
@@ -82,7 +79,6 @@ workflow OutlierExclusion {
       clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
       sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
-      duckdb_zip = duckdb_zip,
       runtime_docker = docker
   }
 
@@ -120,7 +116,6 @@ task MakeJoinedRawCallsDB {
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
 
-    File duckdb_zip
     String runtime_docker
   }
 
@@ -153,10 +148,7 @@ task MakeJoinedRawCallsDB {
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
       > joined_raw_calls_clusters.tsv
 
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
-     
-    ./duckdb joined_raw_calls.duckdb << 'EOF'
+    duckdb joined_raw_calls.duckdb << 'EOF'
     CREATE TABLE joined_raw_calls_svlens (
         vid VARCHAR,
         svtype VARCHAR,
@@ -193,7 +185,6 @@ task CountSVsPerGenome {
     Array[String] svtypes_to_filter
     File count_svs_script
 
-    File duckdb_zip
     String runtime_docker
   }
 
@@ -214,10 +205,7 @@ task CountSVsPerGenome {
     set -o nounset
     set -o pipefail
 
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
-
-    ./duckdb sv_counts.duckdb << 'EOF'
+    duckdb sv_counts.duckdb << 'EOF'
     CREATE TABLE sv_filters (
         svtype VARCHAR,
         min_svlen DOUBLE,
@@ -306,7 +294,6 @@ task DetermineOutlierVariants {
 
     File determine_outlier_variants_script
 
-    File duckdb_zip
     String runtime_docker
   }
 
@@ -340,9 +327,6 @@ task DetermineOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    unzip '~{duckdb_zip}'
-    chmod u+x ./duckdb
-
     mkdir clusterbatch_vcfs
     cat '~{clusterbatch_vcfs}' '~{clusterbatch_vcf_indicies}' | while read -r vcf; do
       mv -t clusterbatch_vcfs "${vcf}" 
@@ -365,7 +349,7 @@ task DetermineOutlierVariants {
     db="clusterbatch_dbs/${1}_variants.duckdb"
     : > "${tsv}"
     rm -f -- "${db}"
-    ./duckdb "${db}" 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
+    duckdb "${db}" 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
     depth="clusterbatch_vcfs/${1}.cluster_batch.depth.vcf.gz"
     wham="clusterbatch_vcfs/${1}.cluster_batch.wham.vcf.gz"
     manta="clusterbatch_vcfs/${1}.cluster_batch.manta.vcf.gz"
@@ -374,7 +358,7 @@ task DetermineOutlierVariants {
     test -r "${wham}" && query_vcf "${wham}" "${tsv}"
     test -r "${manta}" && query_vcf "${manta}" "${tsv}"
     test -r "${melt}" && query_vcf "${melt}" "${tsv}"
-    ./duckdb "${db}" "COPY variants FROM '${tsv}' (FORMAT CSV, HEADER false, DELIMITER '\t');"
+    duckdb "${db}" "COPY variants FROM '${tsv}' (FORMAT CSV, HEADER false, DELIMITER '\t');"
     EOF
     xargs -L 1 -P 0 -- bash reformat.bash < clusterbatch_ids.list
 
