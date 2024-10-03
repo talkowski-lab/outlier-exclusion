@@ -12,7 +12,7 @@ RUN curl -L -o duckdb_cli-linux-amd64.zip "${DUCKDB_URI}" \
   && cp duckdb /usr/bin/duckdb \
   && rm duckdb_cli-linux-amd64.zip duckdb
 
-RUN curl -L -o bcftools.tar.bz2 \
+RUN curl -L -o bcftools.tar.bz2 "${BCFTOOLS_URI}" \
   && tar -jxf bcftools.tar.bz2 \
   && cd "bcftools-${BCFTOOLS_VERSION}" \
   && make install \
