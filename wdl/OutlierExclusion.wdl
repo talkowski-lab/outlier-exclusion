@@ -9,12 +9,10 @@ workflow OutlierExclusion {
     String docker
 
     # CountSVsPerGenome -------------------------------------------------------
-    File count_svs_script
     Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
 
     # DetermineOutlierSamples -------------------------------------------------
     File wgd_scores
-    File determine_outlier_samples_script
     Float min_wgd_score = -0.2
     Float max_wgd_score = 0.2
     Float iqr_multiplier = 8.0
@@ -28,7 +26,6 @@ workflow OutlierExclusion {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
-    File determine_outlier_variants_script
     File concordance_vcf
     File concordance_vcf_index
     Float min_outlier_sample_prop = 1.0
@@ -52,7 +49,6 @@ workflow OutlierExclusion {
     input:
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       svtypes_to_filter = svtypes_to_filter,
-      count_svs_script = count_svs_script,
       runtime_docker = docker
   }
 
@@ -63,7 +59,6 @@ workflow OutlierExclusion {
       min_wgd_score = min_wgd_score,
       max_wgd_score = max_wgd_score,
       iqr_multiplier = iqr_multiplier,
-      determine_outlier_samples_script = determine_outlier_samples_script,
       runtime_docker = docker
   }
 
@@ -79,7 +74,6 @@ workflow OutlierExclusion {
       clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
       sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
       min_outlier_sample_prop = min_outlier_sample_prop,
-      determine_outlier_variants_script = determine_outlier_variants_script,
       joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
       runtime_docker = docker
   }
@@ -185,7 +179,6 @@ task CountSVsPerGenome {
   input {
     File joined_raw_calls_db
     Array[String] svtypes_to_filter
-    File count_svs_script
 
     String runtime_docker
   }
@@ -230,7 +223,8 @@ task CountSVsPerGenome {
     WHERE isfinite(max_svlen);
     EOF
 
-    python3 '~{count_svs_script}' sv_counts.duckdb '~{joined_raw_calls_db}'
+    python3 '/opt/outlier-exclusion/scripts/count_svs.py' \
+      sv_counts.duckdb '~{joined_raw_calls_db}'
   >>>
 
   output {
@@ -246,8 +240,6 @@ task DetermineOutlierSamples {
     Float max_wgd_score
     Float iqr_multiplier
 
-    File determine_outlier_samples_script
-
     String runtime_docker
   }
 
@@ -257,7 +249,7 @@ task DetermineOutlierSamples {
   command <<<
     set -euo pipefail
 
-    python3 '~{determine_outlier_samples_script}' \
+    python3 '/opt/outlier-exclusion/scripts/determine_outlier_samples.py' \
       '~{sv_counts_db}' \
       '~{iqr_multiplier}' \
       '~{wgd_scores}' \
@@ -293,8 +285,6 @@ task DetermineOutlierVariants {
     File sv_counts_db
     File joined_raw_calls_db
     Float min_outlier_sample_prop
-
-    File determine_outlier_variants_script
 
     String runtime_docker
   }
@@ -364,7 +354,7 @@ task DetermineOutlierVariants {
     EOF
     xargs -L 1 -P 0 -- bash reformat.bash < clusterbatch_ids.list
 
-    python3 '~{determine_outlier_variants_script}' \
+    python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
       '~{sv_counts_db}' \
       '~{joined_raw_calls_db}' \
       clusterbatch_dbs \

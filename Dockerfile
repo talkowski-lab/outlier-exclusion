@@ -20,4 +20,9 @@ RUN curl -L -o bcftools.tar.bz2 "${BCFTOOLS_URI}" \
   && cd .. \
   && rm -fr "bcftools-${BCFTOOLS_VERSION}" bcftools.tar.bz2
 
+
+RUN mkdir -p /opt/outlier-exclusion/scripts
+
+COPY scripts/*.py /opt/outlier-exclusion/scripts/
+
 CMD ["bash"]
