@@ -7,9 +7,9 @@ def validate_filters(con):
     sql = 'SELECT svtype, min_svlen, max_svlen FROM sv_filters;'
     filters = con.sql(sql).fetchall()
     for f in filters:
-        if filters[1] < 0:
+        if f[1] < 0:
             raise ValueError('Min SV length must be >= 0')
-        if filters[1] > filters[2]:
+        if f[1] > f[2]:
             raise ValueError('Min SV length must be <= max SV length')
 
 
