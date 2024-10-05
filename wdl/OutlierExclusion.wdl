@@ -133,10 +133,10 @@ task MakeJoinedRawCallsDB {
     set -o pipefail
 
     bcftools query \
-      --include 'GT ~ "1" & INFO/SVLEN > 0' \
-      --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' \
+      --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
+      --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
       '~{joined_raw_calls_vcf}' \
-      | awk -F'\t' '$2 ~ /^INS/{$2 = "INS"; print}' OFS='\t' > joined_raw_calls_svlens.tsv
+      | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' > joined_raw_calls_svlens.tsv
 
     bcftools query \
       --format '%ID\t%INFO/MEMBERS\n' \
@@ -334,8 +334,10 @@ task DetermineOutlierVariants {
     set -o nounset
     set -o pipefail
     query_vcf() {
-      bcftools query --include 'GT ~ "1"' \
-        --format '[%ID\t%INFO/SVTYPE\t%INFO/SVLEN\t%SAMPLE\n]' "$1" >> "$2"
+      bcftools query \
+        --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
+        --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' "$1" \
+        | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' >> "$2"
     }
     tsv="clusterbatch_dbs/${1}_variants.tsv"
     db="clusterbatch_dbs/${1}_variants.duckdb"
