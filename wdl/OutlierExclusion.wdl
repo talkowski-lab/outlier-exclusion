@@ -121,7 +121,7 @@ task MakeJoinedRawCallsDB {
     memory: '4 GB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
-    preemptible: 3
+    preemptible: 1
     maxRetries: 1
     docker: runtime_docker
     bootDiskSizeGb: 16
