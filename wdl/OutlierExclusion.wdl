@@ -118,7 +118,7 @@ task MakeJoinedRawCallsDB {
   Int disk_size_gb = ceil(size(joined_raw_calls_vcf, 'GB') * 5.0 + 8.0)
 
   runtime {
-    memory: '2 GB'
+    memory: '4 GB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
     preemptible: 3
