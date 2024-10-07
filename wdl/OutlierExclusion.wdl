@@ -320,7 +320,7 @@ task DetermineOutlierVariants {
     set -o pipefail
 
     mkdir clusterbatch_vcfs
-    cat '~{clusterbatch_vcfs}' '~{clusterbatch_vcf_indicies}' | while read -r vcf; do
+    cat '~{write_lines(clusterbatch_vcfs)}' '~{write_lines(clusterbatch_vcf_indicies)}' | while read -r vcf; do
       mv -t clusterbatch_vcfs "${vcf}" 
     done
 
