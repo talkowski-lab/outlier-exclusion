@@ -1,11 +1,10 @@
 import argparse
+from pathlib import Path
+
 import duckdb
 
 
 def write_sv_filter_outliers(con, filter_id, iqr_mult):
-    if iqr_mult < 0:
-        raise ValueError('IQR multiplier must be greater than or equal to 0')
-
     sql = f'SELECT quantile_cont(count, [0.25, 0.5, 0.75]) AS iqr FROM sv_counts_{filter_id};'
     iqr = con.sql(sql).fetchall()[0][0]
     sql = (f'CREATE OR REPLACE TABLE outliers_{filter_id}'
@@ -24,14 +23,11 @@ def find_sv_count_outliers(db, iqr_mult):
 
 
 def find_wgd_outliers(db, wgd_scores_path, min_wgd, max_wgd):
-    if min_wgd > max_wgd:
-        raise ValueError('Min WGD score must be >= max wgd score')
-
     with duckdb.connect(db) as con:
         sql = 'CREATE OR REPLACE TABLE wgd_scores (sample VARCHAR, score FLOAT);'
         con.sql(sql)
         sql = (f'COPY wgd_scores FROM \'{wgd_scores_path}\''
-               '(FORMAT CSV, HEADER false, DELIMITER \'\t\')')
+               '(FORMAT CSV, DELIMITER \'\t\')')
         con.sql(sql)
         sql = ('CREATE OR REPLACE TABLE wgd_outliers'
                ' AS SELECT sample'
@@ -47,6 +43,10 @@ def main(args):
     wgd_scores_path = Path(args.wgd_scores)
     if not wgd_scores_path.is_file():
         raise FileNotFoundError('WGD scores file not found')
+    if args.iqr_mult < 0:
+        raise ValueError('IQR multiplier must be greater than or equal to 0')
+    if args.min_wgd > args.max_wgd:
+        raise ValueError('Min WGD score must be >= max wgd score')
 
     find_sv_count_outliers(counts_db, args.iqr_mult)
     find_wgd_outliers(counts_db, wgd_scores_path, args.min_wgd, args.max_wgd)
@@ -68,8 +68,12 @@ if __name__ == "__main__":
                         help = 'Path to the sample WGD scores')
     parser.add_argument('min_wgd',
                         metavar = 'MIN_WGD',
-                        help = 'Minimum WGD score')
+                        help = 'Minimum WGD score',
+                        type = float)
     parser.add_argument('max_wgd',
                         metavar = 'MAX_WGD',
-                        help = 'Maximum WGD score')
+                        help = 'Maximum WGD score',
+                        type = float)
     args = parser.parse_args()
+
+    main(args)
