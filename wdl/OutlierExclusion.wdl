@@ -366,7 +366,7 @@ task DetermineOutlierVariants {
   >>>
 
   output {
-    File outlier_variants = 'joined_raw_calls_outliers_variants.list'
+    File outlier_variants = 'joined_raw_calls_outlier_variants.list'
   }
 }
 
