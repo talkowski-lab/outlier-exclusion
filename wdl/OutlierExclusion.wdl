@@ -9,7 +9,7 @@ workflow OutlierExclusion {
     String docker
 
     # CountSVsPerGenome -------------------------------------------------------
-    Array[String] svtypes_to_filter = ['DEL;-Inf;Inf', 'DUP;-Inf;Inf']
+    Array[String] svtypes_to_filter = ['DEL;0;Inf', 'DUP;0;Inf']
 
     # DetermineOutlierSamples -------------------------------------------------
     File wgd_scores
