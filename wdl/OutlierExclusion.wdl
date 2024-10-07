@@ -249,8 +249,9 @@ task DetermineOutlierSamples {
   command <<<
     set -euo pipefail
 
+    mv '~{sv_counts_db}' sv_counts_with_outliers.duckdb
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_samples.py' \
-      '~{sv_counts_db}' \
+      sv_counts_with_outliers.duckdb \
       '~{iqr_multiplier}' \
       '~{wgd_scores}' \
       '~{min_wgd_score}' \
@@ -268,7 +269,7 @@ task DetermineOutlierSamples {
   }
 
   output {
-    File sv_counts_db_with_outliers = sv_counts_db
+    File sv_counts_db_with_outliers = 'sv_counts_with_outliers.duckdb'
   }
 }
 
