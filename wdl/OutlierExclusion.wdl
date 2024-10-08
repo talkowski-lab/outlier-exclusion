@@ -380,7 +380,7 @@ task FlagOutlierVariants {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(concordance_vcf) * 2.0 + 8.0)
+  Int disk_size_gb = ceil(size(concordance_vcf, 'GB') * 2.0 + 8.0)
 
   runtime {
     memory: '2 GB'
