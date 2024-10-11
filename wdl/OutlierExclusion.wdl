@@ -171,9 +171,10 @@ task MakeTidyVCF {
     set -o nounset
     set -o pipefail
 
-    bcftools view --output-type v --regions '~{contig}' '~{vcf}' \
-      | awk -f /opt/outlier-exclusion/scripts/make_tidy_vcf.awk \
-          '~{write_lines(filters)}' - \
+    bcftools view --output-type u --regions '~{contig}' '~{vcf}' \
+      | bcftools query --include 'INFO/SVTYPE != "BND" & GT ~ "1"' \
+          --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
+      | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
       | gzip -c > '~{contig}_tidy_vcf.tsv.gz'
   >>>
 

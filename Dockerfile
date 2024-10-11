@@ -39,6 +39,6 @@ RUN curl -L -o htslib.tar.bz2 "${HTSLIB_URI}" \
 
 RUN mkdir -p /opt/outlier-exclusion/scripts
 
-COPY scripts/* /opt/outlier-exclusion/scripts/
+COPY scripts/*.py /opt/outlier-exclusion/scripts/
 
 CMD ["bash"]
