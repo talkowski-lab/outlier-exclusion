@@ -262,7 +262,7 @@ task MakeJoinedRawCallsDB {
     done < '~{write_lines(tidy_vcfs)}'
 
     while read -r f; do
-      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);
+      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
     done < '~{write_lines(clusters)}'
   >>>
 
