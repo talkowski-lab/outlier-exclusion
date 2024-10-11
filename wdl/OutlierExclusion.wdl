@@ -3,13 +3,13 @@ version 1.0
 workflow OutlierExclusion {
   input {
 
-    # MakeJoinedRawCallsDB ------------------------------------------------------
+    # SplitVCF ----------------------------------------------------------------
     File joined_raw_calls_vcf
-    File joined_raw_calls_vcf_index
+    Int num_splits = 16
     String docker
 
-    # CountSVsPerGenome -------------------------------------------------------
-    Array[String] svtypes_to_filter = ['DEL;0;Inf', 'DUP;0;Inf']
+    # MakeTidyVCF -------------------------------------------------------------
+    Array[String] svtypes_to_filter = ['DEL;0;inf', 'DUP;0;inf']
 
     # DetermineOutlierSamples -------------------------------------------------
     File wgd_scores
@@ -26,22 +26,40 @@ workflow OutlierExclusion {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
-    File concordance_vcf
-    File concordance_vcf_index
+    File filtered_vcf
+    File filtered_vcf_index
     Float min_outlier_sample_prop = 1.0
 
     # FlagOutlierVariants -----------------------------------------------------
     String cohort_prefix
+  }
 
-    # ApplyManualFilter -------------------------------------------------------
-    String filter_name = 'manual_filter'
-    String? bcftools_filter
+  call SplitVCF {
+    input:
+      vcf = joined_raw_calls_vcf,
+      num_splits = num_splits,
+      runtime_docker = docker
+  }
+
+  scatter (v in SplitVCF.vcf_splits) {
+    call MakeTidyVCF {
+      input:
+        vcf = v,
+        filters = svtypes_to_filter,
+        runtime_docker = docker
+    }
+
+    call GetJoinedRawCallsClusters {
+      input:
+        vcf = v,
+        runtime_docker = docker
+    }
   }
 
   call MakeJoinedRawCallsDB {
     input:
-      joined_raw_calls_vcf = joined_raw_calls_vcf,
-      joined_raw_calls_vcf_index = joined_raw_calls_vcf_index,
+      tidy_vcfs = MakeTidyVCF.tidy_vcf,
+      clusters = GetJoinedRawCallsClusters.clusters,
       runtime_docker = docker
   }
 
@@ -81,47 +99,109 @@ workflow OutlierExclusion {
   call FlagOutlierVariants {
     input:
       cohort_prefix = cohort_prefix,
-      concordance_vcf = concordance_vcf,
-      concordance_vcf_index = concordance_vcf_index,
+      filtered_vcf = filtered_vcf,
+      filtered_vcf_index = filtered_vcf_index,
       outlier_variants = DetermineOutlierVariants.outlier_variants,
       runtime_docker = docker
   }
 
-  if (defined(bcftools_filter)) {
-    call ApplyManualFilter {
-      input:
-        cohort_prefix = cohort_prefix,
-        vcf = FlagOutlierVariants.outlier_annotated_vcf,
-        vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index,
-        filter_name = filter_name,
-        bcftools_filter = select_first([bcftools_filter, '']),
-        runtime_docker = docker
-    }
-    File manual_filtered_vcf = ApplyManualFilter.hard_filtered_vcf
-    File manual_filtered_vcf_index = ApplyManualFilter.hard_filtered_vcf_index
-  }
-
   output {
-    File manual_filtered_and_flagged_vcf = select_first([manual_filtered_vcf, FlagOutlierVariants.outlier_annotated_vcf])
-    File manual_filtered_and_flagged_vcf_index = select_first([manual_filtered_vcf_index, FlagOutlierVariants.outlier_annotated_vcf_index])
+    File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
+    File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
   }
 }
 
-task MakeJoinedRawCallsDB {
+task SplitVCF {
   input {
-    File joined_raw_calls_vcf
-    File joined_raw_calls_vcf_index
-
+    File vcf
+    Int num_splits
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(joined_raw_calls_vcf, 'GB') * 5.0 + 8.0)
+  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
 
   runtime {
-    memory: '4 GB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: '512MiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
     cpus: 1
-    preemptible: 1
+    preemptible: 3
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    vcf='~{vcf}'
+    if [[ "${vcf}" == *.gz ]]; then
+      mv "${vcf}" a.vcf.gz
+    else
+      mv "${vcf}" a.vcf
+      bgzip a.vcf
+    fi
+
+    awk -f /opt/outlier-exclusion/scripts/split_vcf.awk \
+      a.vcf.gz \
+      ~{num_splits} \
+      split
+  >>>
+
+  output {
+    Array[File] vcf_splits = glob('split*.vcf.gz')
+  }
+}
+
+task MakeTidyVCF {
+  input {
+    File vcf
+    Array[String] filters
+    String runtime_docker
+  }
+
+  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
+
+  runtime {
+    memory: '512MiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
+    cpus: 1
+    preemptible: 3
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    bgzip -cd '~{vcf}' \
+      | awk -f /opt/outlier-exclusion/scripts/make_tidy_vcf.awk \
+          '~{write_lines(filters)}' - \
+      | gzip -c > tidy_vcf.tsv.gz
+  >>>
+
+  output {
+    File tidy_vcf = 'tidy_vcf.tsv.gz'
+  }
+}
+
+task GetJoinedRawCallsClusters {
+  input {
+    File vcf
+    String runtime_docker
+  }
+
+  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
+
+  runtime {
+    memory: '512MiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
+    cpus: 1
+    preemptible: 3
     maxRetries: 1
     docker: runtime_docker
     bootDiskSizeGb: 16
@@ -133,16 +213,41 @@ task MakeJoinedRawCallsDB {
     set -o pipefail
 
     bcftools query \
-      --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
-      --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
-      '~{joined_raw_calls_vcf}' \
-      | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' > joined_raw_calls_svlens.tsv
-
-    bcftools query \
       --format '%ID\t%INFO/MEMBERS\n' \
-      '~{joined_raw_calls_vcf}' \
+      '~{vcf}' \
       | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      > joined_raw_calls_clusters.tsv
+      | gzip -c > "$(basename '~{vcf}').clusters.gz"
+  >>>
+
+  output {
+    File clusters = glob('*.clusters.gz')
+  }
+}
+
+task MakeJoinedRawCallsDB {
+  input {
+    Array[File] tidy_vcfs
+    Array[File] clusters
+
+    String runtime_docker
+  }
+
+  Int disk_size_gib = ceil(size(flatten([tidy_vcfs, clusters]), 'GiB') * 3.0) + 8
+
+  runtime {
+    memory: '4GiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
+    cpus: 4
+    preemptible: 3
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
 
     duckdb joined_raw_calls.duckdb << 'EOF'
     CREATE TABLE joined_raw_calls_svlens (
@@ -155,19 +260,15 @@ task MakeJoinedRawCallsDB {
         vid VARCHAR,
         member VARCHAR
     );
-    COPY joined_raw_calls_svlens
-    FROM 'joined_raw_calls_svlens.tsv' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
-    COPY joined_raw_calls_clusters
-    FROM 'joined_raw_calls_clusters.tsv' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
     EOF
+
+    while read -r f; do
+      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_svlens FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+    done < '~{write_lines(tidy_vcfs)}'
+
+    while read -r f; do
+      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);
+    done < '~{write_lines(clusters)}'
   >>>
 
   output {
@@ -183,11 +284,11 @@ task CountSVsPerGenome {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(joined_raw_calls_db, 'GB') * 2.0 + 8.0)
+  Int disk_size_gib = ceil(size(joined_raw_calls_db, 'GiB') * 2.0) + 8
 
   runtime {
-    memory: '4 GB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: '4GiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
     cpus: 1
     preemptible: 3
     maxRetries: 0
@@ -243,8 +344,8 @@ task DetermineOutlierSamples {
     String runtime_docker
   }
 
-  Float input_size = size([sv_counts_db, wgd_scores], 'GB')
-  Int disk_size_gb = ceil(input_size * 1.5) + 8
+  Float input_size = size([sv_counts_db, wgd_scores], 'GiB')
+  Int disk_size_gib = ceil(input_size * 1.5) + 8
 
   command <<<
     set -euo pipefail
@@ -259,10 +360,10 @@ task DetermineOutlierSamples {
   >>>
 
   runtime {
-    memory: '4 GB'
+    memory: '4GiB'
     cpu: 1
     bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
+    disks: 'local-disk ${disk_size_gib} HDD'
     preemptible: 1
     maxRetries: 1
     docker: runtime_docker
@@ -299,17 +400,16 @@ task DetermineOutlierVariants {
     clustered_melt_vcf_indicies
   ])
 
-  Int disk_size_gb = ceil(
-    size(clusterbatch_vcfs, 'GB') * 2.0
-    + size(joined_raw_calls_db, 'GB')
-    + 16.0
-  )
+  Int disk_size_gib = ceil(
+    size(clusterbatch_vcfs, 'GiB') * 2.0
+    + size(joined_raw_calls_db, 'GiB')
+  ) + 16
 
   runtime {
-    memory: '4 GB'
+    memory: '4GiB'
     cpu: 1
     bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
+    disks: 'local-disk ${disk_size_gib} HDD'
     preemptible: 1
     maxRetries: 0
     docker: runtime_docker
@@ -373,20 +473,20 @@ task DetermineOutlierVariants {
 task FlagOutlierVariants {
   input {
     String cohort_prefix
-    File concordance_vcf
-    File concordance_vcf_index
+    File filtered_vcf
+    File filtered_vcf_index
     File outlier_variants
 
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(concordance_vcf, 'GB') * 2.0 + 8.0)
+  Int disk_size_gib = ceil(size(filtered_vcf, 'GiB') * 2.0) + 8
 
   runtime {
-    memory: '2 GB'
+    memory: '2GiB'
     cpu: 1
     bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
+    disks: 'local-disk ${disk_size_gib} HDD'
     preemptible: 1
     maxRetries: 0
     docker: runtime_docker
@@ -399,13 +499,13 @@ task FlagOutlierVariants {
 
     bcftools query --include 'INFO/TRUTH_VID != ""' \
       --format '%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO/TRUTH_VID\n' \
-      '~{concordance_vcf}' \
-      | LC_ALL=C sort -k6,6 > concordance_variants.tsv
+      '~{filtered_vcf}' \
+      | LC_ALL=C sort -k6,6 > filtered_vcf_variants.tsv
     LC_ALL=C join -1 6 -2 1 -o 1.1,1.2,1.3,1.4,1.5 -t $'\t' \
-      concordance_variants.tsv \
-      '~{outlier_variants}' > concordance_calls_outliers.tsv
+      filtered_vcf_variants.tsv \
+      '~{outlier_variants}' > filtered_calls_outliers.tsv
 
-    awk -F'\t' '{print $0"\toutlier"}' 'concordance_calls_outliers.tsv' \
+    awk -F'\t' '{print $0"\toutlier"}' 'filtered_calls_outliers.tsv' \
       | sort -k1,1 -k2,2n > annotations.tsv
     bgzip annotations.tsv
     tabix --begin 2 --end 2 --sequence 1 annotations.tsv.gz
@@ -417,51 +517,14 @@ task FlagOutlierVariants {
       --annotations annotations.tsv.gz \
       --columns 'CHROM,POS,REF,ALT,~ID,.FILTER' \
       --header-lines header.txt \
-      --output '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz' \
+      --output '~{cohort_prefix}_outliers_annotated_calls.vcf.gz' \
       --output-type z \
       --write-index=tbi \
-      '~{concordance_vcf}'
+      '~{filtered_vcf}'
   >>>
 
   output {
-    File outlier_annotated_vcf = '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz'
-    File outlier_annotated_vcf_index = '~{cohort_prefix}_outliers_annotated_concordance_calls.vcf.gz.tbi'
-  }
-}
-
-task ApplyManualFilter {
-  input {
-    String cohort_prefix
-    File vcf
-    File vcf_index
-    String filter_name
-    String bcftools_filter
-
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0 + 8.0)
-
-  runtime {
-    memory: '1 GB'
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 1
-    maxRetries: 1
-    docker: runtime_docker
-  }
-
-  command <<<
-    set -euo pipefail
-
-    bcftools view -e '~{bcftools_filter}' ~{vcf} -Oz \
-      -o '~{cohort_prefix}.~{filter_name}.vcf.gz'
-    tabix '~{cohort_prefix}.~{filter_name}.vcf.gz'
-  >>>
-
-  output {
-    File hard_filtered_vcf = '~{cohort_prefix}.~{filter_name}.vcf.gz'
-    File hard_filtered_vcf_index = '~{cohort_prefix}.~{filter_name}.vcf.gz.tbi'
+    File outlier_annotated_vcf = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz'
+    File outlier_annotated_vcf_index = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz.tbi'
   }
 }
