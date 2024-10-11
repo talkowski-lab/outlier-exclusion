@@ -3,9 +3,9 @@ version 1.0
 workflow OutlierExclusion {
   input {
 
-    # SplitVCF ----------------------------------------------------------------
+    # GetContigsArray ---------------------------------------------------------
     File joined_raw_calls_vcf
-    Int num_splits = 16
+    File joined_raw_calls_vcf_index
     String docker
 
     # MakeTidyVCF -------------------------------------------------------------
@@ -34,24 +34,28 @@ workflow OutlierExclusion {
     String cohort_prefix
   }
 
-  call SplitVCF {
+  call GetContigsArray  {
     input:
       vcf = joined_raw_calls_vcf,
-      num_splits = num_splits,
+      vcf_index = joined_raw_calls_vcf_index,
       runtime_docker = docker
   }
 
-  scatter (v in SplitVCF.vcf_splits) {
+  scatter (contig in GetContigsArray.contigs) {
     call MakeTidyVCF {
       input:
-        vcf = v,
+        vcf = joined_raw_calls_vcf,
+        vcf_index = joined_raw_calls_vcf_index,
+        contig = contig,
         filters = svtypes_to_filter,
         runtime_docker = docker
     }
 
     call GetJoinedRawCallsClusters {
       input:
-        vcf = v,
+        vcf = joined_raw_calls_vcf,
+        vcf_index = joined_raw_calls_vcf_index,
+        contig = contig,
         runtime_docker = docker
     }
   }
@@ -111,17 +115,18 @@ workflow OutlierExclusion {
   }
 }
 
-task SplitVCF {
+task GetContigsArray {
   input {
     File vcf
-    Int num_splits
+    File vcf_index
+
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
+  Int disk_size_gib = ceil(size(vcf, 'GiB')) + 8
 
   runtime {
-    memory: '512MiB'
+    memory: '256MiB'
     disks: 'local-disk ${disk_size_gib} HDD'
     cpus: 1
     preemptible: 3
@@ -129,34 +134,22 @@ task SplitVCF {
     docker: runtime_docker
     bootDiskSizeGb: 16
   }
-
+  
   command <<<
-    set -o errexit
-    set -o nounset
-    set -o pipefail
-
-    vcf='~{vcf}'
-    if [[ "${vcf}" == *.gz ]]; then
-      mv "${vcf}" a.vcf.gz
-    else
-      mv "${vcf}" a.vcf
-      bgzip a.vcf
-    fi
-
-    awk -f /opt/outlier-exclusion/scripts/split_vcf.awk \
-      a.vcf.gz \
-      ~{num_splits} \
-      split
+    bcftools index --stats '~{vcf}' \
+      | cut -f 1 > contigs.list
   >>>
 
   output {
-    Array[File] vcf_splits = glob('split*.vcf.gz')
+    Array[String] contigs = read_lines('contigs.list')
   }
 }
 
 task MakeTidyVCF {
   input {
     File vcf
+    File vcf_index
+    String contig
     Array[String] filters
     String runtime_docker
   }
@@ -164,7 +157,7 @@ task MakeTidyVCF {
   Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
 
   runtime {
-    memory: '512MiB'
+    memory: '1GiB'
     disks: 'local-disk ${disk_size_gib} HDD'
     cpus: 1
     preemptible: 3
@@ -178,20 +171,22 @@ task MakeTidyVCF {
     set -o nounset
     set -o pipefail
 
-    bgzip -cd '~{vcf}' \
+    bcftools view --output-type v --regions '~{contig}' '~{vcf}' \
       | awk -f /opt/outlier-exclusion/scripts/make_tidy_vcf.awk \
           '~{write_lines(filters)}' - \
-      | gzip -c > tidy_vcf.tsv.gz
+      | gzip -c > '~{contig}_tidy_vcf.tsv.gz'
   >>>
 
   output {
-    File tidy_vcf = 'tidy_vcf.tsv.gz'
+    File tidy_vcf = '${contig}_tidy_vcf.tsv.gz'
   }
 }
 
 task GetJoinedRawCallsClusters {
   input {
     File vcf
+    File vcf_index 
+    String contig
     String runtime_docker
   }
 
@@ -212,15 +207,14 @@ task GetJoinedRawCallsClusters {
     set -o nounset
     set -o pipefail
 
-    bcftools query \
-      --format '%ID\t%INFO/MEMBERS\n' \
-      '~{vcf}' \
-      | awk -F'\t' '{split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      | gzip -c > "$(basename '~{vcf}').clusters.gz"
+    bcftools view --output-type u --regions '~{contig}' '~{vcf}' \
+      | bcftools query --format '%ID\t%INFO/MEMBERS\n' \
+      | awk -F'\t' '$2 {split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
+      | gzip -c > '~{contig}_sv_clusters.tsv.gz'
   >>>
 
   output {
-    File clusters = glob('*.clusters.gz')
+    File clusters = '${contig}_sv_clusters.tsv.gz'
   }
 }
 
