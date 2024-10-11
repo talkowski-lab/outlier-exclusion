@@ -28,8 +28,8 @@ BEGIN {
 ARGC == 3 && FILENAME == ARGV[1] {
     n = split($0, parts, /;/)
     if (n != 3) {
-        print "invalid SV filter: " $0 > "/dev/stderr"
-        print "format is SVTYPE;MIN_SVLEN;MAX_SVLEN" > "/dev/stderr"
+        print_err("invalid SV filter: " $0)
+        print_err("format is SVTYPE;MIN_SVLEN;MAX_SVLEN")
         exit 84
     }
 
@@ -46,8 +46,8 @@ ARGC == 3 && FILENAME == ARGV[1] {
     }
 
     if (min > max) {
-        print "invalid SV filter: " $0 > "/dev/stderr"
-        print "min SV length cannot be greater than max SV length" > "/dev/stderr"
+        print_err("invalid SV filter: " $0)
+        print_err("min SV length cannot be greater than max SV length")
         exit 85
     }
 
@@ -57,7 +57,8 @@ ARGC == 3 && FILENAME == ARGV[1] {
 }
 
 /^#CHROM/ {
-    for (i = FORMAT + 1; i < NF; ++i) {
+    site_cnt = 0
+    for (i = FORMAT + 1; i <= NF; ++i) {
         samples[i] = $i
     }
 
@@ -65,37 +66,60 @@ ARGC == 3 && FILENAME == ARGV[1] {
 }
 
 !/^#/ {
+    ++site_cnt
     vid = $ID
-    q = match($INFO, /;?SVTYPE=[^;]+;?/) 
-    svtype = q ? substr($INFO, RSTART, RLENGTH) : ""
-    sub(/^;?SVTYPE=/, "", svtype)
-    sub(/;$/, "", svtype)
-    q = match($INFO, /;?SVLEN=[^;]+;?/)
-    svlen = q ? substr($INFO, RSTART, RLENGTH) : ""
-    sub(/^;?SVLEN=/, "", svlen)
-    sub(/;$/, "", svlen)
+    if (!vid) {
+        print_err(sprintf("skipping variant number %d with missing ID", site_cnt))
+    }
 
-    if (svtype == "BND") {
+    q = match($INFO, /;?SVTYPE=[^;]+;?/) 
+    if (!q) {
+        print_err(sprintf("skipping variant '%s' with missing SVTYPE", vid))
         next
     }
 
-    if (!sfcnt) {
+    svtype = substr($INFO, RSTART, RLENGTH)
+    if (svtype ~ /=BND;?/) {
+        next
+    }
+    # ALT includes INS subtypes
+    svtype = $ALT
+    sub(/^</, "", svtype)
+    sub(/>$/, "", svtype)
+
+    q = match($INFO, /;?SVLEN=[^;]+;?/)
+    if (!q) {
+        print_err(sprintf("skipping variant '%s' with missing SVLEN", vid))
+        next
+    }
+    svlen = substr($INFO, RSTART, RLENGTH)
+    sub(/^;?SVLEN=/, "", svlen)
+    sub(/;$/, "", svlen)
+
+    if (sfcnt == 0) {
         print_site()
         next
     }
 
-    for (i = 1; i < sfcnt; ++i) {
+    for (i = 1; i <= sfcnt; ++i) {
         if (svtype == sftype[i] && svlen >= sfmin[i] && svlen <= sfmax[i]) {
             print_site()
+            next
         }
     }
 }
 
-function print_site(    i, gt_fields) {
-    for (i = FORMAT + 1; i < NF; ++i) {
-        split($i, gt_fields, /:/)
-        if (gt_fields[1] ~ /1/) {
+function print_site(    i, n, gt_fields) {
+    for (i = FORMAT + 1; i <= NF; ++i) {
+        # This assumes the genotype field is always first, which is required by
+        # the VCF spec.
+        n = split($i, gt_fields, /:/)
+        if (n > 0 && gt_fields[1] ~ /1/) {
             print vid, svtype, svlen, samples[i]
         }
     }
+}
+
+function print_err(x) {
+    print x > "/dev/stderr"
 }
