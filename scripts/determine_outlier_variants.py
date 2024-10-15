@@ -5,7 +5,7 @@ import duckdb
 
 
 def find_outliers_from_filter(con, filter_id, min_prop):
-    sql = 'SELECT svtype, min_svlen, max_svlen FROM sv_filters WHERE id = ?;'
+    sql = 'SELECT svtype FROM sv_filters WHERE id = ?;'
     filters = con.execute(sql, [filter_id]).fetchall()[0]
 
     sql = (f'CREATE OR REPLACE TABLE var_db.outliers_{filter_id}'
@@ -16,12 +16,12 @@ def find_outliers_from_filter(con, filter_id, min_prop):
            ' FROM ('
            'SELECT vid, sample'
            ' FROM var_db.variants'
-           ' WHERE svtype = ? AND svlen >= ? AND svlen <= ?) l'
+           ' WHERE svtype = ?) l'
            f' LEFT JOIN outliers_{filter_id} r'
            ' USING(sample)'
            ' GROUP BY l.vid)'
            ' WHERE n_outliers / n_samples >= ?;')
-    con.execute(sql, [filters[0], filters[1], filters[2], min_prop])
+    con.execute(sql, [filters[0], min_prop])
 
     sql = (f'SELECT DISTINCT l.vid'
            ' FROM jrc_db.joined_raw_calls_clusters l'
