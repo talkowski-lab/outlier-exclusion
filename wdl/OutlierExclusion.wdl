@@ -84,20 +84,22 @@ workflow OutlierExclusion {
       runtime_docker = docker
   }
 
-  call DetermineOutlierVariants {
-    input:
-      clustered_depth_vcfs = clustered_depth_vcfs,
-      clustered_manta_vcfs = clustered_manta_vcfs,
-      clustered_wham_vcfs = clustered_wham_vcfs,
-      clustered_melt_vcfs = clustered_melt_vcfs,
-      clustered_depth_vcf_indicies = clustered_depth_vcf_indicies,
-      clustered_manta_vcf_indicies = clustered_manta_vcf_indicies,
-      clustered_wham_vcf_indicies = clustered_wham_vcf_indicies,
-      clustered_melt_vcf_indicies = clustered_melt_vcf_indicies,
-      sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
-      min_outlier_sample_prop = min_outlier_sample_prop,
-      joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
-      runtime_docker = docker
+  scatter (i in range(length(clustered_depth_vcfs))) {
+    call DetermineOutlierVariants {
+      input:
+        clustered_depth_vcfs = [clustered_depth_vcfs[i]],
+        clustered_manta_vcfs = [clustered_manta_vcfs[i]],
+        clustered_wham_vcfs = [clustered_wham_vcfs[i]],
+        clustered_melt_vcfs = [clustered_melt_vcfs[i]],
+        clustered_depth_vcf_indicies = [clustered_depth_vcf_indicies[i]],
+        clustered_manta_vcf_indicies = [clustered_manta_vcf_indicies[i]],
+        clustered_wham_vcf_indicies = [clustered_wham_vcf_indicies[i]],
+        clustered_melt_vcf_indicies = [clustered_melt_vcf_indicies[i]],
+        sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
+        min_outlier_sample_prop = min_outlier_sample_prop,
+        joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
+        runtime_docker = docker
+    }
   }
 
   call FlagOutlierVariants {
@@ -470,7 +472,7 @@ task FlagOutlierVariants {
     String cohort_prefix
     File filtered_vcf
     File filtered_vcf_index
-    File outlier_variants
+    Array[File] outlier_variants
 
     String runtime_docker
   }
@@ -492,13 +494,18 @@ task FlagOutlierVariants {
     set -o nounset
     set -o pipefail
 
+    while read -r f; do
+      cat "${f}"
+    done < '~{write_lines(outlier_variants)}' \
+      | LC_ALL=C sort -u > outlier_variants.list
+
     bcftools query --include 'INFO/TRUTH_VID != ""' \
       --format '%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO/TRUTH_VID\n' \
       '~{filtered_vcf}' \
       | LC_ALL=C sort -k6,6 > filtered_vcf_variants.tsv
     LC_ALL=C join -1 6 -2 1 -o 1.1,1.2,1.3,1.4,1.5 -t $'\t' \
       filtered_vcf_variants.tsv \
-      '~{outlier_variants}' > filtered_calls_outliers.tsv
+      outlier_variants.list > filtered_calls_outliers.tsv
 
     awk -F'\t' '{print $0"\toutlier"}' 'filtered_calls_outliers.tsv' \
       | sort -k1,1 -k2,2n > annotations.tsv
