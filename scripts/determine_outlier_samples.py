@@ -5,14 +5,19 @@ import duckdb
 
 
 def write_sv_filter_outliers(con, filter_id, iqr_mult):
-    sql = f'SELECT quantile_cont(count, [0.25, 0.5, 0.75]) AS iqr FROM sv_counts_{filter_id};'
-    iqr = con.sql(sql).fetchall()[0][0]
+    sql = ('SELECT quant[2], quant[3] - quant[1]'
+           ' FROM'
+           ' (SELECT quantile_cont(count, [0.25, 0.5, 0.75]) AS quant'
+           f' FROM sv_counts_{filter_id});')
+    results = con.sql(sql).fetchall()[0]
+    median = results[0]
+    iqr = results[1]
     sql = (f'CREATE OR REPLACE TABLE outliers_{filter_id}'
             ' AS'
             ' SELECT sample'
            f' FROM sv_counts_{filter_id}'
-            ' WHERE count < $1 - $2 * $4 OR count > $1 + $3 * $4')
-    con.execute(sql, [iqr[1], iqr[0], iqr[2], iqr_mult])
+            ' WHERE count < $1 - $2 * $3 OR count > $1 + $2 * $3')
+    con.execute(sql, [median, iqr, iqr_mult])
 
 
 def find_sv_count_outliers(db, iqr_mult):
