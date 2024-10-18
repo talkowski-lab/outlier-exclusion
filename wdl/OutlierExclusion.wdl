@@ -114,6 +114,7 @@ workflow OutlierExclusion {
   output {
     File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
     File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
+    File outlier_samples = DetermineOutlierSamples.outlier_samples
   }
 }
 
@@ -354,6 +355,13 @@ task DetermineOutlierSamples {
       '~{wgd_scores}' \
       '~{min_wgd_score}' \
       '~{max_wgd_score}'
+
+    python3 '/opt/outlier-exclusion/scripts/dump_outlier_samples.py' \
+      sv_counts_db_with_outliers.duckdb \
+      dump
+
+    print 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > outlier_samples.tsv
+    find dump -type f -name '*.tsv' -exec cat '{}' \; >> outlier_samples.tsv
   >>>
 
   runtime {
@@ -368,6 +376,7 @@ task DetermineOutlierSamples {
 
   output {
     File sv_counts_db_with_outliers = 'sv_counts_with_outliers.duckdb'
+    File outlier_samples = 'outlier_samples.tsv'
   }
 }
 
