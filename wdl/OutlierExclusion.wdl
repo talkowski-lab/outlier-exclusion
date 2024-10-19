@@ -360,7 +360,7 @@ task DetermineOutlierSamples {
       sv_counts_with_outliers.duckdb \
       dump
 
-    print 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > outlier_samples.tsv
+    printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > outlier_samples.tsv
     find dump -type f -name '*.tsv' -exec cat '{}' \; >> outlier_samples.tsv
   >>>
 
