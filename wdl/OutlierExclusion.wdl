@@ -18,6 +18,7 @@ workflow OutlierExclusion {
     Float min_wgd_score = -0.2
     Float max_wgd_score = 0.2
     Float iqr_multiplier = 8.0
+    File? outlier_samples
 
     # DetermineOutlierVariants ------------------------------------------------
     Array[File] clustered_depth_vcfs
@@ -74,29 +75,40 @@ workflow OutlierExclusion {
       runtime_docker = docker
   }
 
-  call MakeSVsDB {
-    input:
-      tidy_vcfs = MakeTidyVCF.tidy_vcf,
-      runtime_docker = docker
+  if (!defined(outlier_samples)) {
+    call MakeSVsDB {
+      input:
+        tidy_vcfs = MakeTidyVCF.tidy_vcf,
+        runtime_docker = docker
+    }
+
+    call MakeSVCountsDB {
+      input:
+        svs_db = MakeSVsDB.svs_db,
+        svtypes_to_filter = svtypes_to_filter,
+        runtime_docker = docker
+    }
+
+    call DetermineOutlierSamples {
+      input:
+        sv_counts_db = MakeSVCountsDB.sv_counts_db,
+        wgd_scores = wgd_scores,
+        min_wgd_score = min_wgd_score,
+        max_wgd_score = max_wgd_score,
+        iqr_multiplier = iqr_multiplier,
+        runtime_docker = docker
+    }
   }
 
-  call MakeSVCountsDB {
-    input:
-      svs_db = MakeSVsDB.svs_db,
-      svtypes_to_filter = svtypes_to_filter,
-      runtime_docker = docker
+  if (defined(outlier_samples)) {
+    call FormatOutlierSamples {
+      input:
+        outlier_samples = select_first([outlier_samples]),
+        runtime_docker = docker
+    }
   }
 
-  call DetermineOutlierSamples {
-    input:
-      sv_counts_db = MakeSVCountsDB.sv_counts_db,
-      wgd_scores = wgd_scores,
-      min_wgd_score = min_wgd_score,
-      max_wgd_score = max_wgd_score,
-      iqr_multiplier = iqr_multiplier,
-      runtime_docker = docker
-  }
-
+  File outlier_samples_db = select_first([FormatOutlierSamples.db, DetermineOutlierSamples.sv_counts_db_with_outliers])
   scatter (i in range(length(clustered_depth_vcfs))) {
     call DetermineOutlierVariants {
       input:
@@ -108,7 +120,7 @@ workflow OutlierExclusion {
         clustered_manta_vcf_indicies = [clustered_manta_vcf_indicies[i]],
         clustered_wham_vcf_indicies = [clustered_wham_vcf_indicies[i]],
         clustered_melt_vcf_indicies = [clustered_melt_vcf_indicies[i]],
-        sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
+        outlier_samples_db = outlier_samples_db,
         min_outlier_sample_prop = min_outlier_sample_prop,
         jrc_clusters_db = MakeJoinedRawCallsClustersDB.jrc_clusters_db,
         runtime_docker = docker
@@ -127,7 +139,7 @@ workflow OutlierExclusion {
   output {
     File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
     File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
-    File outlier_samples = DetermineOutlierSamples.outlier_samples
+    File? determined_outlier_samples = DetermineOutlierSamples.outlier_samples
   }
 }
 
@@ -418,6 +430,44 @@ task DetermineOutlierSamples {
   }
 }
 
+task FormatOutlierSamples {
+  input {
+    File outlier_samples
+    String runtime_docker
+  }
+
+  Int disk_size_gb = ceil(size(outlier_samples, 'GB')) + 16
+
+  runtime {
+    memory: '1GiB'
+    disks: 'local-disk ${disk_size_gb} HDD'
+    cpus: 1
+    preemptible: 3
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    duckdb outlier_samples.duckdb << 'EOF'
+    CREATE TABLE outlier_samples (
+        sample VARCHAR,
+        svtype VARCHAR
+    );
+    COPY outlier_samples
+    FROM '~{outlier_samples}' (
+        FORMAT CSV,
+        DELIMITER '\t',
+        HEADER false
+    );
+    EOF
+  >>>
+
+  output {
+    File db = 'outlier_samples.duckdb'
+  }
+}
+
 task DetermineOutlierVariants {
   input {
     Array[File] clustered_depth_vcfs
@@ -428,7 +478,7 @@ task DetermineOutlierVariants {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
-    File sv_counts_db
+    File outlier_samples_db
     File jrc_clusters_db
     Float min_outlier_sample_prop
 
@@ -447,7 +497,7 @@ task DetermineOutlierVariants {
   Int disk_size_gb = ceil(
     size(clusterbatch_vcfs, 'GB') * 2.0
     + size(jrc_clusters_db, 'GB')
-    + size(sv_counts_db, 'GB')
+    + size(outlier_samples_db, 'GB')
   ) + 16
 
   runtime {
@@ -503,7 +553,7 @@ task DetermineOutlierVariants {
     xargs -L 1 -P 0 -- bash reformat.bash < clusterbatch_ids.list
 
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
-      '~{sv_counts_db}' \
+      '~{outlier_samples_db}' \
       '~{jrc_clusters_db}' \
       clusterbatch_dbs \
       '~{min_outlier_sample_prop}' \
