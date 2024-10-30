@@ -42,28 +42,11 @@ workflow OutlierExclusion {
       runtime_docker = docker
   }
 
-  call GetContigsArray as f_contigs {
-    input:
-      vcf = filtered_vcf,
-      vcf_index = filtered_vcf_index,
-      runtime_docker = docker
-  }
-
   scatter (contig in jrc_contigs.contigs) {
     call GetJoinedRawCallsClusters {
       input:
         vcf = joined_raw_calls_vcf,
         vcf_index = joined_raw_calls_vcf_index,
-        contig = contig,
-        runtime_docker = docker
-    }
-  }
-
-  scatter (contig in f_contigs.contigs) {
-    call MakeTidyVCF {
-      input:
-        vcf = filtered_vcf,
-        vcf_index = filtered_vcf_index,
         contig = contig,
         runtime_docker = docker
     }
@@ -76,6 +59,23 @@ workflow OutlierExclusion {
   }
 
   if (!defined(outlier_samples)) {
+    call GetContigsArray as f_contigs {
+      input:
+        vcf = filtered_vcf,
+        vcf_index = filtered_vcf_index,
+        runtime_docker = docker
+    }
+
+    scatter (contig in f_contigs.contigs) {
+      call MakeTidyVCF {
+        input:
+          vcf = filtered_vcf,
+          vcf_index = filtered_vcf_index,
+          contig = contig,
+          runtime_docker = docker
+      }
+    }
+
     call MakeSVsDB {
       input:
         tidy_vcfs = MakeTidyVCF.tidy_vcf,
