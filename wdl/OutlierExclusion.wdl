@@ -28,8 +28,6 @@ workflow OutlierExclusion {
     Array[File] clustered_manta_vcf_indicies
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
-    File filtered_vcf
-    File filtered_vcf_index
     Float min_outlier_sample_prop = 1.0
 
     # FlagOutlierVariants -----------------------------------------------------
