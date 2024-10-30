@@ -302,7 +302,7 @@ task MakeSVsDB {
     EOF
 
     while read -r f; do
-      duckdb sv_counts.duckdb "COPY svs FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+      duckdb svs.duckdb "COPY svs FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
     done < '~{write_lines(tidy_vcfs)}'
   >>>
 
