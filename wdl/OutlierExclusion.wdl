@@ -139,10 +139,10 @@ task GetContigsArray {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(vcf, 'GB')) + 8
+  Int disk_size_gb = ceil(size(vcf, 'GB')) + 16
 
   runtime {
-    memory: '256MiB'
+    memory: '1GiB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
     preemptible: 3
@@ -169,7 +169,7 @@ task MakeTidyVCF {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 8
+  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 16
 
   runtime {
     memory: '1GiB'
@@ -207,10 +207,10 @@ task GetJoinedRawCallsClusters {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 8
+  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 16
 
   runtime {
-    memory: '512MiB'
+    memory: '1GiB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
     preemptible: 3
@@ -242,10 +242,10 @@ task MakeJoinedRawCallsClustersDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(clusters, 'GB') * 3.0) + 8
+  Int disk_size_gb = ceil(size(clusters, 'GB')) + 16
 
   runtime {
-    memory: '2GiB'
+    memory: '1GiB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
     preemptible: 3
@@ -277,9 +277,9 @@ task MakeSVsDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(tidy_vcfs, 'GB') * 3.0) + 8
+  Int disk_size_gb = ceil(size(tidy_vcfs, 'GB')) + 16
   runtime {
-    memory: '4GiB'
+    memory: '1GiB'
     disks: 'local-disk ${disk_size_gb} HDD'
     cpus: 1
     preemptible: 3
@@ -320,11 +320,11 @@ task MakeSVCountsDB {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(svs_db, 'GB') * 1.5) + 8
+  Int disk_size_gb = ceil(size(svs_db, 'GB')) + 16
   runtime {
-    memory: '4GiB'
+    memory: '2GiB'
     disks: 'local-disk ${disk_size_gb} HDD'
-    cpus: 2
+    cpus: 1
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
@@ -379,7 +379,7 @@ task DetermineOutlierSamples {
   }
 
   Float input_size = size([sv_counts_db, wgd_scores], 'GB')
-  Int disk_size_gb = ceil(input_size * 1.5) + 8
+  Int disk_size_gb = ceil(input_size) + 16
 
   command <<<
     set -o errexit
@@ -403,7 +403,7 @@ task DetermineOutlierSamples {
   >>>
 
   runtime {
-    memory: '4GiB'
+    memory: '1GiB'
     cpu: 1
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
@@ -451,12 +451,12 @@ task DetermineOutlierVariants {
   ) + 16
 
   runtime {
-    memory: '4GiB'
+    memory: '2GiB'
     cpu: 1
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 1
-    maxRetries: 0
+    preemptible: 3
+    maxRetries: 1
     docker: runtime_docker
   }
 
@@ -525,15 +525,15 @@ task FlagOutlierVariants {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(filtered_vcf, 'GB') * 2.0) + 8
+  Int disk_size_gb = ceil(size(filtered_vcf, 'GB') * 2.0) + 16
 
   runtime {
     memory: '2GiB'
     cpu: 1
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 1
-    maxRetries: 0
+    preemptible: 3
+    maxRetries: 1
     docker: runtime_docker
   }
 
