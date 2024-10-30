@@ -6,9 +6,11 @@ workflow OutlierExclusion {
     # GetContigsArray ---------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
+    File filtered_vcf
+    File filtered_vcf_index
     String docker
 
-    # MakeTidyVCF -------------------------------------------------------------
+    # MakeSVCountsDB
     Array[String] svtypes_to_filter = ['DEL;0;inf', 'DUP;0;inf']
 
     # DetermineOutlierSamples -------------------------------------------------
@@ -34,23 +36,21 @@ workflow OutlierExclusion {
     String cohort_prefix
   }
 
-  call GetContigsArray  {
+  call GetContigsArray as jrc_contigs {
     input:
       vcf = joined_raw_calls_vcf,
       vcf_index = joined_raw_calls_vcf_index,
       runtime_docker = docker
   }
 
-  scatter (contig in GetContigsArray.contigs) {
-    call MakeTidyVCF {
-      input:
-        vcf = joined_raw_calls_vcf,
-        vcf_index = joined_raw_calls_vcf_index,
-        contig = contig,
-        filters = svtypes_to_filter,
-        runtime_docker = docker
-    }
+  call GetContigsArray as f_contigs {
+    input:
+      vcf = filtered_vcf,
+      vcf_index = filtered_vcf_index,
+      runtime_docker = docker
+  }
 
+  scatter (contig in jrc_contigs.contigs) {
     call GetJoinedRawCallsClusters {
       input:
         vcf = joined_raw_calls_vcf,
@@ -60,23 +60,38 @@ workflow OutlierExclusion {
     }
   }
 
-  call MakeJoinedRawCallsDB {
+  scatter (contig in f_contigs.contigs) {
+    call MakeTidyVCF {
+      input:
+        vcf = filtered_vcf,
+        vcf_index = filtered_vcf_index,
+        contig = contig,
+        runtime_docker = docker
+    }
+  }
+
+  call MakeJoinedRawCallsClustersDB {
     input:
-      tidy_vcfs = MakeTidyVCF.tidy_vcf,
       clusters = GetJoinedRawCallsClusters.clusters,
       runtime_docker = docker
   }
 
-  call CountSVsPerGenome {
+  call MakeSVsDB {
     input:
-      joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
+      tidy_vcfs = MakeTidyVCF.tidy_vcf,
+      runtime_docker = docker
+  }
+
+  call MakeSVCountsDB {
+    input:
+      svs_db = MakeSVsDB.svs_db,
       svtypes_to_filter = svtypes_to_filter,
       runtime_docker = docker
   }
 
   call DetermineOutlierSamples {
     input:
-      sv_counts_db = CountSVsPerGenome.sv_counts_db,
+      sv_counts_db = MakeSVCountsDB.sv_counts_db,
       wgd_scores = wgd_scores,
       min_wgd_score = min_wgd_score,
       max_wgd_score = max_wgd_score,
@@ -97,7 +112,7 @@ workflow OutlierExclusion {
         clustered_melt_vcf_indicies = [clustered_melt_vcf_indicies[i]],
         sv_counts_db = DetermineOutlierSamples.sv_counts_db_with_outliers,
         min_outlier_sample_prop = min_outlier_sample_prop,
-        joined_raw_calls_db = MakeJoinedRawCallsDB.joined_raw_calls_db,
+        jrc_clusters_db = MakeJoinedRawCallsClustersDB.jrc_clusters_db,
         runtime_docker = docker
     }
   }
@@ -153,7 +168,6 @@ task MakeTidyVCF {
     File vcf
     File vcf_index
     String contig
-    Array[String] filters
     String runtime_docker
   }
 
@@ -222,20 +236,19 @@ task GetJoinedRawCallsClusters {
   }
 }
 
-task MakeJoinedRawCallsDB {
+task MakeJoinedRawCallsClustersDB {
   input {
-    Array[File] tidy_vcfs
     Array[File] clusters
 
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(flatten([tidy_vcfs, clusters]), 'GiB') * 3.0) + 8
+  Int disk_size_gib = ceil(size(clusters) * 3.0) + 8
 
   runtime {
-    memory: '4GiB'
+    memory: '2GiB'
     disks: 'local-disk ${disk_size_gib} HDD'
-    cpus: 4
+    cpus: 1
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
@@ -247,49 +260,74 @@ task MakeJoinedRawCallsDB {
     set -o nounset
     set -o pipefail
 
-    duckdb joined_raw_calls.duckdb << 'EOF'
-    CREATE TABLE joined_raw_calls_svlens (
-        vid VARCHAR,
-        svtype VARCHAR,
-        svlen INTEGER,
-        sample VARCHAR
-    );
-    CREATE TABLE joined_raw_calls_clusters (
-        vid VARCHAR,
-        member VARCHAR
-    );
-    EOF
+    duckdb jrc_clusters.duckdb 'CREATE TABLE jrc_clusters (vid VARCHAR, member VARCHAR);'
 
     while read -r f; do
-      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_svlens FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
-    done < '~{write_lines(tidy_vcfs)}'
-
-    while read -r f; do
-      duckdb joined_raw_calls.duckdb "COPY joined_raw_calls_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+      duckdb jrc_clusters.duckdb "COPY jrc_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
     done < '~{write_lines(clusters)}'
   >>>
 
   output {
-    File joined_raw_calls_db = 'joined_raw_calls.duckdb'
+    File jrc_clusters_db = 'jrc_clusters.duckdb'
   }
 }
 
-task CountSVsPerGenome {
+task MakeSVsDB {
   input {
-    File joined_raw_calls_db
-    Array[String] svtypes_to_filter
-
+    Array[File] tidy_vcfs
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(joined_raw_calls_db, 'GiB') * 2.0) + 8
-
+  Int disk_size_gib = ceil(size(tidy_vcfs) * 3.0) + 8
   runtime {
     memory: '4GiB'
     disks: 'local-disk ${disk_size_gib} HDD'
     cpus: 1
     preemptible: 3
-    maxRetries: 0
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    duckdb svs.duckdb << 'EOF'
+    CREATE TABLE svs (
+        vid VARCHAR,
+        svtype VARCHAR,
+        svlen INTEGER,
+        sample VARCHAR
+    );
+    EOF
+
+    while read -r f; do
+      duckdb sv_counts.duckdb "COPY svs FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
+    done < '~{write_lines(tidy_vcfs)}'
+  >>>
+
+  output {
+    File svs_db = 'svs.duckdb'
+  }
+}
+
+task MakeSVCountsDB {
+  input {
+    File svs_db
+    Array[String] svtypes_to_filter
+
+    String runtime_docker
+  }
+
+  Int disk_size_gib = ceil(size(svs_db) * 1.5) + 8
+  runtime {
+    memory: '4GiB'
+    disks: 'local-disk ${disk_size_gib} HDD'
+    cpus: 2
+    preemptible: 3
+    maxRetries: 1
     docker: runtime_docker
     bootDiskSizeGb: 16
   }
@@ -322,8 +360,7 @@ task CountSVsPerGenome {
     WHERE isfinite(max_svlen);
     EOF
 
-    python3 '/opt/outlier-exclusion/scripts/count_svs.py' \
-      sv_counts.duckdb '~{joined_raw_calls_db}'
+    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb '~{svs_db}'
   >>>
 
   output {
@@ -346,7 +383,9 @@ task DetermineOutlierSamples {
   Int disk_size_gib = ceil(input_size * 1.5) + 8
 
   command <<<
-    set -euo pipefail
+    set -o errexit
+    set -o nounset
+    set -o pipefail
 
     mv '~{sv_counts_db}' sv_counts_with_outliers.duckdb
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_samples.py' \
@@ -391,7 +430,7 @@ task DetermineOutlierVariants {
     Array[File] clustered_wham_vcf_indicies
     Array[File] clustered_melt_vcf_indicies
     File sv_counts_db
-    File joined_raw_calls_db
+    File jrc_clusters_db
     Float min_outlier_sample_prop
 
     String runtime_docker
@@ -408,7 +447,8 @@ task DetermineOutlierVariants {
 
   Int disk_size_gib = ceil(
     size(clusterbatch_vcfs, 'GiB') * 2.0
-    + size(joined_raw_calls_db, 'GiB')
+    + size(jrc_clusters_db, 'GiB')
+    + size(sv_counts_db, 'GiB')
   ) + 16
 
   runtime {
@@ -465,10 +505,10 @@ task DetermineOutlierVariants {
 
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
       '~{sv_counts_db}' \
-      '~{joined_raw_calls_db}' \
+      '~{jrc_clusters_db}' \
       clusterbatch_dbs \
       '~{min_outlier_sample_prop}' \
-      | LC_ALL=C sort -u > joined_raw_calls_outlier_variants.list
+      | LC_ALL=C sort -u > outlier_variants.list
   >>>
 
   output {
