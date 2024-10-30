@@ -141,7 +141,7 @@ task GetContigsArray {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(vcf, 'GiB')) + 8
+  Int disk_size_gib = ceil(size(vcf, 'GB')) + 8
 
   runtime {
     memory: '256MiB'
@@ -171,7 +171,7 @@ task MakeTidyVCF {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
+  Int disk_size_gib = ceil(size(vcf, 'GB') * 2.0) + 8
 
   runtime {
     memory: '1GiB'
@@ -208,7 +208,7 @@ task GetJoinedRawCallsClusters {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(vcf, 'GiB') * 2.0) + 8
+  Int disk_size_gib = ceil(size(vcf, 'GB') * 2.0) + 8
 
   runtime {
     memory: '512MiB'
@@ -243,7 +243,7 @@ task MakeJoinedRawCallsClustersDB {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(clusters) * 3.0) + 8
+  Int disk_size_gib = ceil(size(clusters, 'GB') * 3.0) + 8
 
   runtime {
     memory: '2GiB'
@@ -278,7 +278,7 @@ task MakeSVsDB {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(tidy_vcfs) * 3.0) + 8
+  Int disk_size_gib = ceil(size(tidy_vcfs, 'GB') * 3.0) + 8
   runtime {
     memory: '4GiB'
     disks: 'local-disk ${disk_size_gib} HDD'
@@ -321,7 +321,7 @@ task MakeSVCountsDB {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(svs_db) * 1.5) + 8
+  Int disk_size_gib = ceil(size(svs_db, 'GB') * 1.5) + 8
   runtime {
     memory: '4GiB'
     disks: 'local-disk ${disk_size_gib} HDD'
@@ -379,7 +379,7 @@ task DetermineOutlierSamples {
     String runtime_docker
   }
 
-  Float input_size = size([sv_counts_db, wgd_scores], 'GiB')
+  Float input_size = size([sv_counts_db, wgd_scores], 'GB')
   Int disk_size_gib = ceil(input_size * 1.5) + 8
 
   command <<<
@@ -446,9 +446,9 @@ task DetermineOutlierVariants {
   ])
 
   Int disk_size_gib = ceil(
-    size(clusterbatch_vcfs, 'GiB') * 2.0
-    + size(jrc_clusters_db, 'GiB')
-    + size(sv_counts_db, 'GiB')
+    size(clusterbatch_vcfs, 'GB') * 2.0
+    + size(jrc_clusters_db, 'GB')
+    + size(sv_counts_db, 'GB')
   ) + 16
 
   runtime {
@@ -526,7 +526,7 @@ task FlagOutlierVariants {
     String runtime_docker
   }
 
-  Int disk_size_gib = ceil(size(filtered_vcf, 'GiB') * 2.0) + 8
+  Int disk_size_gib = ceil(size(filtered_vcf, 'GB') * 2.0) + 8
 
   runtime {
     memory: '2GiB'
