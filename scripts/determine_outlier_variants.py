@@ -60,7 +60,7 @@ def find_outliers_from_list(con, svtype, min_prop):
     sql = (
         "SELECT DISTINCT l.vid"
         " FROM jrc_db.jrc_clusters l"
-        " JOIN var_db.outliers_{svtype} r ON (l.member = r.vid)"
+        f" JOIN var_db.outliers_{svtype} r ON (l.member = r.vid)"
     )
     outliers = set([x[0] for x in con.sql(sql).fetchall()])
 
