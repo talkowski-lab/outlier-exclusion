@@ -31,7 +31,7 @@ workflow OutlierExclusion {
     Array[File] clustered_melt_vcf_indicies
     Float min_outlier_sample_prop = 1.0
 
-    # MergeOutlierAnnotatedBCFs -----------------------------------------------
+    # FlagOutlierVariants -----------------------------------------------------
     String cohort_prefix
   }
 
@@ -39,13 +39,6 @@ workflow OutlierExclusion {
     input:
       vcf = joined_raw_calls_vcf,
       vcf_index = joined_raw_calls_vcf_index,
-      runtime_docker = docker
-  }
-
-  call GetContigsArray as f_contigs {
-    input:
-      vcf = filtered_vcf,
-      vcf_index = filtered_vcf_index,
       runtime_docker = docker
   }
 
@@ -66,6 +59,13 @@ workflow OutlierExclusion {
   }
 
   if (!defined(outlier_samples)) {
+    call GetContigsArray as f_contigs {
+      input:
+        vcf = filtered_vcf,
+        vcf_index = filtered_vcf_index,
+        runtime_docker = docker
+    }
+
     scatter (contig in f_contigs.contigs) {
       call MakeTidyVCF {
         input:
@@ -127,27 +127,18 @@ workflow OutlierExclusion {
     }
   }
 
-  scatter (contig in f_contigs.contigs) {
-    call FlagOutlierVariants {
-      input:
-        filtered_vcf = filtered_vcf,
-        filtered_vcf_index = filtered_vcf_index,
-        contig = contig,
-        outlier_variants = DetermineOutlierVariants.outlier_variants,
-        runtime_docker = docker
-    }
-  }
-
-  call MergeOutlierAnnotatedBCFs {
+  call FlagOutlierVariants {
     input:
-      bcfs = FlagOutlierVariants.outlier_annotated_bcf,
       cohort_prefix = cohort_prefix,
+      filtered_vcf = filtered_vcf,
+      filtered_vcf_index = filtered_vcf_index,
+      outlier_variants = DetermineOutlierVariants.outlier_variants,
       runtime_docker = docker
   }
 
   output {
-    File outlier_annotated_vcf = MergeOutlierAnnotatedBCFs.outlier_annotated_vcf
-    File outlier_annotated_vcf_index = MergeOutlierAnnotatedBCFs.outlier_annotated_vcf_index
+    File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
+    File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
     File? determined_outlier_samples = DetermineOutlierSamples.outlier_samples
   }
 }
@@ -576,9 +567,9 @@ task DetermineOutlierVariants {
 
 task FlagOutlierVariants {
   input {
+    String cohort_prefix
     File filtered_vcf
     File filtered_vcf_index
-    String contig
     Array[File] outlier_variants
 
     String runtime_docker
@@ -606,17 +597,15 @@ task FlagOutlierVariants {
     done < '~{write_lines(outlier_variants)}' \
       | LC_ALL=C sort -u > outlier_variants.list
 
-    bcftools view --output-type b --regions '~{contig}' \
-      '~{filtered_vcf}' > '~{contig}.bcf'
-
     bcftools query --include 'INFO/TRUTH_VID != ""' \
       --format '%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO/TRUTH_VID\n' \
-      '~{contig}.bcf' \
+      '~{filtered_vcf}' \
       | LC_ALL=C sort -k6,6 > filtered_vcf_variants.tsv
-
     LC_ALL=C join -1 6 -2 1 -o 1.1,1.2,1.3,1.4,1.5 -t $'\t' \
-      filtered_vcf_variants.tsv outlier_variants.list \
-      | awk -F'\t' '$1 == c{print $0"\toutlier"}' c='~{contig}' \
+      filtered_vcf_variants.tsv \
+      outlier_variants.list > filtered_calls_outliers.tsv
+
+    awk -F'\t' '{print $0"\toutlier"}' 'filtered_calls_outliers.tsv' \
       | sort -k1,1 -k2,2n > annotations.tsv
     bgzip annotations.tsv
     tabix --begin 2 --end 2 --sequence 1 annotations.tsv.gz
@@ -628,53 +617,14 @@ task FlagOutlierVariants {
       --annotations annotations.tsv.gz \
       --columns 'CHROM,POS,REF,ALT,~ID,.FILTER' \
       --header-lines header.txt \
-      --output '~{contig}_oe.bcf' \
-      --output-type b \
-      '~{contig}.bcf'
-  >>>
-
-  output {
-    File outlier_annotated_bcf = '${contig}_oe.bcf'
-  }
-}
-
-task MergeOutlierAnnotatedBCFs {
-  input {
-    Array[File] bcfs
-    String cohort_prefix
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(bcfs, 'GB') * 2.0) + 16
-
-  runtime {
-    memory: '1GiB'
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
-  }
-
-  command <<<
-    set -o errexit
-    set -o nounset
-    set -o pipefail
-
-    awk -F'/' '{a=$NF; sub(/_oe\.bcf$/, "", a); print a"\t"$0}' \
-      '~{write_lines(bcfs)}' \
-      | sort -k1,1 \
-      | cut -f 2 > manifest.list
-
-    bcftools concat --file-list 'manifest.list' \
+      --output '~{cohort_prefix}_outliers_annotated_calls.vcf.gz' \
+      --output-type z \
       --write-index=tbi \
-      --output '~{cohort_prefix}-outliers_annotated.vcf.gz' \
-      --output-type z
+      '~{filtered_vcf}'
   >>>
 
   output {
-    File outlier_annotated_vcf = '~{cohort_prefix}-outliers_annotated.vcf.gz'
-    File outlier_annotated_vcf_index = '~{cohort_prefix}-outliers_annotated.vcf.gz.tbi'
+    File outlier_annotated_vcf = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz'
+    File outlier_annotated_vcf_index = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz.tbi'
   }
 }
