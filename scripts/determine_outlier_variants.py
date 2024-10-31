@@ -32,16 +32,16 @@ def find_outliers_from_filter(con, filter_id, min_prop):
     sql = (
         "SELECT DISTINCT l.vid"
         " FROM jrc_db.jrc_clusters l"
-        f" JOIN var_db.outliers_{filter_id} r ON (l.member = r.vid)"
+        f" JOIN var_db.outliers_{filter_id} r ON (l.member = r.vid);"
     )
     outliers = set([x[0] for x in con.sql(sql).fetchall()])
 
     return outliers
 
 
-def find_outliers_from_list(con, svtype, min_prop):
+def find_outliers_from_list(con, i, svtype, min_prop):
     sql = (
-        f"CREATE OR REPLACE TABLE var_db.outliers_{svtype}"
+        f"CREATE OR REPLACE TABLE var_db.outliers_{i}"
         " AS SELECT vid FROM ("
         "SELECT l.vid AS vid,"
         " count(*) AS n_samples,"
@@ -60,7 +60,7 @@ def find_outliers_from_list(con, svtype, min_prop):
     sql = (
         "SELECT DISTINCT l.vid"
         " FROM jrc_db.jrc_clusters l"
-        f" JOIN var_db.outliers_{svtype} r ON (l.member = r.vid)"
+        f" JOIN var_db.outliers_{svtype} r ON (l.member = r.vid);"
     )
     outliers = set([x[0] for x in con.sql(sql).fetchall()])
 
@@ -70,7 +70,10 @@ def find_outliers_from_list(con, svtype, min_prop):
 def find_outlier_variants(con, min_prop, ols_dbtype):
     if ols_dbtype == OUTLIER_SAMPLES_FROM_LIST:
         svtypes = con.sql("SELECT DISTINCT svtype FROM outlier_samples;").fetchall()
-        outliers = [find_outliers_from_list(con, i[0], min_prop) for i in svtypes]
+        outliers = [
+            find_outliers_from_list(con, i, sv[0], min_prop)
+            for i, sv in enumerate(svtypes)
+        ]
 
         return set().union(*outliers)
     else:
