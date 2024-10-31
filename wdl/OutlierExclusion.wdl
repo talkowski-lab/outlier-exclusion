@@ -579,7 +579,7 @@ task FlagOutlierVariants {
 
   runtime {
     memory: '2GiB'
-    cpu: 1
+    cpu: 4
     bootDiskSizeGb: 16
     disks: 'local-disk ${disk_size_gb} HDD'
     preemptible: 3
@@ -617,14 +617,15 @@ task FlagOutlierVariants {
       --annotations annotations.tsv.gz \
       --columns 'CHROM,POS,REF,ALT,~ID,.FILTER' \
       --header-lines header.txt \
-      --output '~{cohort_prefix}_outliers_annotated_calls.vcf.gz' \
+      --output '~{cohort_prefix}-outliers_annotated.vcf.gz' \
       --output-type z \
+      --threads 4 \
       --write-index=tbi \
       '~{filtered_vcf}'
   >>>
 
   output {
-    File outlier_annotated_vcf = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz'
-    File outlier_annotated_vcf_index = '~{cohort_prefix}_outliers_annotated_calls.vcf.gz.tbi'
+    File outlier_annotated_vcf = '~{cohort_prefix}-outliers_annotated.vcf.gz'
+    File outlier_annotated_vcf_index = '~{cohort_prefix}-outliers_annotated.vcf.gz.tbi'
   }
 }
