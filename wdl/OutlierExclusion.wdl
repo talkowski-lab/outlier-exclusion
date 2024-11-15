@@ -6,8 +6,6 @@ workflow OutlierExclusion {
     # GetContigsArray ---------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
-    File filtered_vcf
-    File filtered_vcf_index
     String docker
 
     # MakeSVCountsDB
@@ -32,6 +30,8 @@ workflow OutlierExclusion {
     Float min_outlier_sample_prop = 1.0
 
     # FlagOutlierVariants -----------------------------------------------------
+    File filtered_vcf
+    File filtered_vcf_index
     String cohort_prefix
   }
 
@@ -59,18 +59,11 @@ workflow OutlierExclusion {
   }
 
   if (!defined(outlier_samples)) {
-    call GetContigsArray as f_contigs {
-      input:
-        vcf = filtered_vcf,
-        vcf_index = filtered_vcf_index,
-        runtime_docker = docker
-    }
-
-    scatter (contig in f_contigs.contigs) {
+    scatter (contig in jrc_contigs.contigs) {
       call MakeTidyVCF {
         input:
-          vcf = filtered_vcf,
-          vcf_index = filtered_vcf_index,
+          vcf = joined_raw_calls_vcf,
+          vcf_index = joined_raw_calls_vcf_index,
           contig = contig,
           runtime_docker = docker
       }
