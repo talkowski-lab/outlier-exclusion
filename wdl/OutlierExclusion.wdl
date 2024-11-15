@@ -9,7 +9,7 @@ workflow OutlierExclusion {
     String docker
 
     # MakeSVCountsDB
-    Array[String] svtypes_to_filter = ['DEL;5000;25000', 'DUP;0;25000']
+    Array[String] svtypes_to_filter = ['DEL;5000;25000', 'DUP;5000;25000']
 
     # DetermineOutlierSamples -------------------------------------------------
     File wgd_scores
