@@ -6,5 +6,6 @@ workflows:
     filters:
       branches:
         - main
+        - add-scramble
       tags:
         - /.*/

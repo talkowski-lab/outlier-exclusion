@@ -3,6 +3,8 @@ version 1.0
 workflow OutlierExclusion {
   input {
 
+    File? optional
+
     # GetContigsArray ---------------------------------------------------------
     File joined_raw_calls_vcf
     File joined_raw_calls_vcf_index
@@ -19,14 +21,16 @@ workflow OutlierExclusion {
     File? outlier_samples
 
     # DetermineOutlierVariants ------------------------------------------------
-    Array[File] clustered_depth_vcfs
-    Array[File] clustered_manta_vcfs
-    Array[File] clustered_wham_vcfs
-    Array[File] clustered_melt_vcfs
-    Array[File] clustered_depth_vcf_indicies
-    Array[File] clustered_manta_vcf_indicies
-    Array[File] clustered_wham_vcf_indicies
-    Array[File] clustered_melt_vcf_indicies
+    Array[File]? clustered_depth_vcfs
+    Array[File]? clustered_manta_vcfs
+    Array[File]? clustered_wham_vcfs
+    Array[File]? clustered_melt_vcfs
+    Array[File]? clustered_scramble_vcfs
+    Array[File]? clustered_depth_vcf_indicies
+    Array[File]? clustered_manta_vcf_indicies
+    Array[File]? clustered_wham_vcf_indicies
+    Array[File]? clustered_melt_vcf_indicies
+    Array[File]? clustered_scramble_vcf_indicies
     Float min_outlier_sample_prop = 1.0
 
     # FlagOutlierVariants -----------------------------------------------------
@@ -102,17 +106,33 @@ workflow OutlierExclusion {
   }
 
   File outlier_samples_db = select_first([FormatOutlierSamples.db, DetermineOutlierSamples.sv_counts_db_with_outliers])
-  scatter (i in range(length(clustered_depth_vcfs))) {
+  Array[File] looper = select_first([clustered_depth_vcfs, clustered_manta_vcfs,
+    clustered_wham_vcfs, clustered_melt_vcfs, clustered_scramble_vcfs])
+
+  Array[File] depths = select_first([clustered_depth_vcfs, []])
+  Array[File] mantas = select_first([clustered_manta_vcfs, []])
+  Array[File] whams = select_first([clustered_wham_vcfs, []])
+  Array[File] melts = select_first([clustered_melt_vcfs, []])
+  Array[File] scrambles = select_first([clustered_scramble_vcfs, []])
+  Array[File] depth_idxs = select_first([clustered_depth_vcf_indicies, []])
+  Array[File] manta_idxs = select_first([clustered_manta_vcf_indicies, []])
+  Array[File] wham_idxs = select_first([clustered_wham_vcf_indicies, []])
+  Array[File] melt_idxs = select_first([clustered_melt_vcf_indicies, []])
+  Array[File] scramble_idxs = select_first([clustered_scramble_vcf_indicies, []])
+
+  scatter (i in range(length(looper))) {
     call DetermineOutlierVariants {
       input:
-        clustered_depth_vcfs = [clustered_depth_vcfs[i]],
-        clustered_manta_vcfs = [clustered_manta_vcfs[i]],
-        clustered_wham_vcfs = [clustered_wham_vcfs[i]],
-        clustered_melt_vcfs = [clustered_melt_vcfs[i]],
-        clustered_depth_vcf_indicies = [clustered_depth_vcf_indicies[i]],
-        clustered_manta_vcf_indicies = [clustered_manta_vcf_indicies[i]],
-        clustered_wham_vcf_indicies = [clustered_wham_vcf_indicies[i]],
-        clustered_melt_vcf_indicies = [clustered_melt_vcf_indicies[i]],
+        clustered_depth_vcf = if defined(clustered_depth_vcfs) then depths[i] else optional,
+        clustered_manta_vcf = if defined(clustered_manta_vcfs) then mantas[i] else optional,
+        clustered_wham_vcf = if defined(clustered_wham_vcfs) then whams[i] else optional,
+        clustered_melt_vcf = if defined(clustered_melt_vcfs) then melts[i] else optional,
+        clustered_scramble_vcf = if defined(clustered_scramble_vcfs) then scrambles[i] else optional,
+        clustered_depth_vcf_index = if defined(clustered_depth_vcf_indicies) then depth_idxs[i] else optional,
+        clustered_manta_vcf_index = if defined(clustered_manta_vcf_indicies) then manta_idxs[i] else optional,
+        clustered_wham_vcf_index = if defined(clustered_wham_vcf_indicies) then wham_idxs[i] else optional,
+        clustered_melt_vcf_index = if defined(clustered_melt_vcf_indicies) then melt_idxs[i] else optional,
+        clustered_scramble_vcf_index = if defined(clustered_scramble_vcf_indicies) then scramble_idxs[i] else optional,
         outlier_samples_db = outlier_samples_db,
         min_outlier_sample_prop = min_outlier_sample_prop,
         jrc_clusters_db = MakeJoinedRawCallsClustersDB.jrc_clusters_db,
@@ -463,14 +483,16 @@ task FormatOutlierSamples {
 
 task DetermineOutlierVariants {
   input {
-    Array[File] clustered_depth_vcfs
-    Array[File] clustered_manta_vcfs
-    Array[File] clustered_wham_vcfs
-    Array[File] clustered_melt_vcfs
-    Array[File] clustered_depth_vcf_indicies
-    Array[File] clustered_manta_vcf_indicies
-    Array[File] clustered_wham_vcf_indicies
-    Array[File] clustered_melt_vcf_indicies
+    File? clustered_depth_vcf
+    File? clustered_manta_vcf
+    File? clustered_wham_vcf
+    File? clustered_melt_vcf
+    File? clustered_scramble_vcf
+    File? clustered_depth_vcf_index
+    File? clustered_manta_vcf_index
+    File? clustered_wham_vcf_index
+    File? clustered_melt_vcf_index
+    File? clustered_scramble_vcf_index
     File outlier_samples_db
     File jrc_clusters_db
     Float min_outlier_sample_prop
@@ -478,13 +500,13 @@ task DetermineOutlierVariants {
     String runtime_docker
   }
 
-  Array[File] clusterbatch_vcfs = flatten([
-    clustered_depth_vcfs, clustered_manta_vcfs, clustered_wham_vcfs,
-    clustered_melt_vcfs
+  Array[File] clusterbatch_vcfs = select_all([
+    clustered_depth_vcf, clustered_manta_vcf, clustered_wham_vcf,
+    clustered_melt_vcf
   ])
-  Array[File] clusterbatch_vcf_indicies = flatten([
-    clustered_depth_vcf_indicies, clustered_manta_vcf_indicies, clustered_wham_vcf_indicies,
-    clustered_melt_vcf_indicies
+  Array[File] clusterbatch_vcf_indicies = select_all([
+    clustered_depth_vcf_index, clustered_manta_vcf_index, clustered_wham_vcf_index,
+    clustered_melt_vcf_index
   ])
 
   Int disk_size_gb = ceil(
@@ -514,7 +536,7 @@ task DetermineOutlierVariants {
     done
 
     find clusterbatch_vcfs -name '*.vcf.gz' -print \
-      | awk -F'/' '{bn=$NF; sub(/\.cluster_batch\.(depth|wham|manta|melt)\.vcf.gz$/, "", bn); print bn}' \
+      | awk -F'/' '{bn=$NF; sub(/\.cluster_batch\.(depth|wham|manta|melt|scramble)\.vcf.gz$/, "", bn); print bn}' \
       | sort -u > clusterbatch_ids.list
 
     mkdir clusterbatch_dbs
@@ -537,10 +559,12 @@ task DetermineOutlierVariants {
     wham="clusterbatch_vcfs/${1}.cluster_batch.wham.vcf.gz"
     manta="clusterbatch_vcfs/${1}.cluster_batch.manta.vcf.gz"
     melt="clusterbatch_vcfs/${1}.cluster_batch.melt.vcf.gz"
+    scramble="clusterbatch_vcfs/${1}.cluster_batch.scramble.vcf.gz"
     test -r "${depth}" && query_vcf "${depth}" "${tsv}"
     test -r "${wham}" && query_vcf "${wham}" "${tsv}"
     test -r "${manta}" && query_vcf "${manta}" "${tsv}"
     test -r "${melt}" && query_vcf "${melt}" "${tsv}"
+    test -r "${scramble}" && query_vcf "${scramble}" "${tsv}"
     duckdb "${db}" "COPY variants FROM '${tsv}' (FORMAT CSV, HEADER false, DELIMITER '\t');"
     EOF
     xargs -L 1 -P 0 -- bash reformat.bash < clusterbatch_ids.list
