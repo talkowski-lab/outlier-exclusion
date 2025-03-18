@@ -5,9 +5,11 @@ workflow OutlierExclusion {
 
     File? optional
 
+    File contigs_file
+
     # GetContigsArray ---------------------------------------------------------
-    File joined_raw_calls_vcf
-    File joined_raw_calls_vcf_index
+    File join_raw_calls_vcf
+    File join_raw_calls_vcf_index
     String docker
 
     # MakeSVCountsDB
@@ -39,49 +41,49 @@ workflow OutlierExclusion {
     String cohort_prefix
   }
 
-  call GetContigsArray as jrc_contigs {
-    input:
-      vcf = joined_raw_calls_vcf,
-      vcf_index = joined_raw_calls_vcf_index,
-      runtime_docker = docker
-  }
+  Array[String] contigs = read_lines(contigs_file)
 
-  scatter (contig in jrc_contigs.contigs) {
-    call GetJoinedRawCallsClusters {
+  scatter (contig in contigs) {
+    call GetContigFromVcf {
       input:
-        vcf = joined_raw_calls_vcf,
-        vcf_index = joined_raw_calls_vcf_index,
+        vcf = join_raw_calls_vcf,
+        vcf_index = join_raw_calls_vcf_index,
         contig = contig,
         runtime_docker = docker
     }
-  }
 
-  call MakeJoinedRawCallsClustersDB {
-    input:
-      clusters = GetJoinedRawCallsClusters.clusters,
-      runtime_docker = docker
-  }
+    call GetJoinRawCallsClusters {
+      input:
+        bcf = GetContigFromVcf.contig_bcf,
+        runtime_docker = docker
+    }
 
-  if (!defined(outlier_samples)) {
-    scatter (contig in jrc_contigs.contigs) {
-      call MakeTidyVCF {
+    if (!defined(outlier_samples)) {
+      call ConvertBcfToTsv {
         input:
-          vcf = joined_raw_calls_vcf,
-          vcf_index = joined_raw_calls_vcf_index,
-          contig = contig,
+          bcf = GetContigFromVcf.contig_bcf,
+          bcf_index = GetContigFromVcf.contig_bcf_index,
           runtime_docker = docker
       }
     }
+  }
 
-    call MakeSVsDB {
+  call MakeJoinRawCallsClustersDb {
+    input:
+      clusters = GetJoinRawCallsClusters.clusters,
+      runtime_docker = docker
+  }
+
+  if (defined(ConvertBcfToTsv.tsv)) {
+    call MakeSvDb {
       input:
-        tidy_vcfs = MakeTidyVCF.tidy_vcf,
+        tsvs = select_all(ConvertBcfToTsv.tsv),
         runtime_docker = docker
     }
 
     call MakeSVCountsDB {
       input:
-        svs_db = MakeSVsDB.svs_db,
+        svs_db = MakeSvDb.sv_db,
         svtypes_to_filter = svtypes_to_filter,
         runtime_docker = docker
     }
@@ -135,7 +137,7 @@ workflow OutlierExclusion {
         clustered_scramble_vcf_index = if defined(clustered_scramble_vcf_indicies) then scramble_idxs[i] else optional,
         outlier_samples_db = outlier_samples_db,
         min_outlier_sample_prop = min_outlier_sample_prop,
-        jrc_clusters_db = MakeJoinedRawCallsClustersDB.jrc_clusters_db,
+        jrc_clusters_db = MakeJoinRawCallsClustersDb.jrc_clusters_db,
         runtime_docker = docker
     }
   }
@@ -156,37 +158,9 @@ workflow OutlierExclusion {
   }
 }
 
-task GetContigsArray {
-  input {
-    File vcf
-    File vcf_index
-
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(vcf, 'GB')) + 16
-
-  runtime {
-    memory: '1GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
-    bootDiskSizeGb: 16
-  }
-  
-  command <<<
-    bcftools index --stats '~{vcf}' \
-      | cut -f 1 > contigs.list
-  >>>
-
-  output {
-    Array[String] contigs = read_lines('contigs.list')
-  }
-}
-
-task MakeTidyVCF {
+# Extract a single contig from a VCF and output as a BCF without any format
+# fields.
+task GetContigFromVcf {
   input {
     File vcf
     File vcf_index
@@ -194,11 +168,11 @@ task MakeTidyVCF {
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 16
+  Int disk_size_gb = ceil(size(vcf, "GB") * 1.2) + 16
 
   runtime {
-    memory: '1GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: "1 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
     cpus: 1
     preemptible: 3
     maxRetries: 1
@@ -206,37 +180,80 @@ task MakeTidyVCF {
     bootDiskSizeGb: 16
   }
 
+  String output_bcf = "${contig}.bcf"
+
   command <<<
     set -o errexit
     set -o nounset
     set -o pipefail
 
-    bcftools view --output-type u --regions '~{contig}' '~{vcf}' \
-      | bcftools view --output-type u --include 'FILTER = "." && INFO/SVLEN != "." && INFO/SVLEN > 0' \
+    bcftools view --output-type u --regions '~{contig}' --write-index=csi
+  >>>
+
+  output {
+    File contig_bcf = output_bcf
+    File contig_bcf_index = "${output_bcf}.csi"
+  }
+}
+
+# Reformat a BCF into a TSV that can be ingested by the SV counting task.
+# The columns are:
+# "variant ID" "SV type" "SV length" "sample ID"
+# one row per carrier.
+task ConvertBcfToTsv {
+  input {
+    File bcf
+    File bcf_index
+    String runtime_docker
+  }
+
+  Int disk_size_gb = ceil(size(bcf, 'GB') * 2.0) + 16
+
+  runtime {
+    memory: "1 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
+    cpus: 1
+    preemptible: 3
+    maxRetries: 1
+    docker: runtime_docker
+    bootDiskSizeGb: 16
+  }
+
+  String output_prefix = basename(bcf, ".bcf")
+  String output_tsv = "${output_prefix}-tidy.tsv.gz"
+
+  command <<<
+    set -o errexit
+    set -o nounset
+    set -o pipefail
+
+    bcftools view --output-type u --include '(FILTER = "." || FILTER = "PASS") && INFO/SVLEN != "." && INFO/SVLEN > 0' '~{bcf}' \
       | bcftools view --output-type u --exclude 'INFO/SVTYPE = "BND"' \
       | bcftools query --include 'GT ~ "1"' --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
       | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
-      | gzip -c > '~{contig}_tidy_vcf.tsv.gz'
+      | gzip -c > '~{output_tsv}'
   >>>
 
   output {
-    File tidy_vcf = '${contig}_tidy_vcf.tsv.gz'
+    File tsv = output_tsv
   }
 }
 
-task GetJoinedRawCallsClusters {
+# Extract the SV clusters from a JoinedRawCalls BCF.
+# The output is a tab-delimited file with the JoinedRawCalls variant ID in the
+# first column and member variant ID (from ClusterBatch VCFs) in the second,
+# one row per cluster member.
+task GetJoinRawCallsClusters {
   input {
-    File vcf
-    File vcf_index 
-    String contig
+    File bcf
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(vcf, 'GB') * 2.0) + 16
+  Int disk_size_gb = ceil(size(bcf, "GB") * 1.2) + 16
 
   runtime {
-    memory: '1GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: "1 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
     cpus: 1
     preemptible: 3
     maxRetries: 1
@@ -244,34 +261,35 @@ task GetJoinedRawCallsClusters {
     bootDiskSizeGb: 16
   }
 
+  String bcf_prefix = basename(bcf, ".bcf")
+
   command <<<
     set -o errexit
     set -o nounset
     set -o pipefail
 
-    bcftools view --output-type u --regions '~{contig}' '~{vcf}' \
-      | bcftools query --format '%ID\t%INFO/MEMBERS\n' \
+    bcftools query --format '%ID\t%INFO/MEMBERS\n' '~{bcf}' \
       | awk -F'\t' '$2 {split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      | gzip -c > '~{contig}_sv_clusters.tsv.gz'
+      | gzip -c > '~{bcf_prefix}-sv_clusters.tsv.gz'
   >>>
 
   output {
-    File clusters = '${contig}_sv_clusters.tsv.gz'
+    File clusters = "${bcf_prefix}-sv_clusters.tsv.gz"
   }
 }
 
-task MakeJoinedRawCallsClustersDB {
+# Make the database of JoinRawCalls variant clusters.
+task MakeJoinRawCallsClustersDb {
   input {
     Array[File] clusters
-
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(clusters, 'GB')) + 16
+  Int disk_size_gb = ceil(size(clusters, "GB")) + 16
 
   runtime {
-    memory: '1GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: "1 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
     cpus: 1
     preemptible: 3
     maxRetries: 1
@@ -292,20 +310,21 @@ task MakeJoinedRawCallsClustersDB {
   >>>
 
   output {
-    File jrc_clusters_db = 'jrc_clusters.duckdb'
+    File jrc_clusters_db = "jrc_clusters.duckdb"
   }
 }
 
-task MakeSVsDB {
+task MakeSvDb {
   input {
-    Array[File] tidy_vcfs
+    Array[File] tsvs
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(tidy_vcfs, 'GB')) + 16
+  Int disk_size_gb = ceil(size(tsvs, "GB") * 1.2) + 16
+
   runtime {
-    memory: '1GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: "1 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
     cpus: 1
     preemptible: 3
     maxRetries: 1
@@ -329,11 +348,11 @@ task MakeSVsDB {
 
     while read -r f; do
       duckdb svs.duckdb "COPY svs FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
-    done < '~{write_lines(tidy_vcfs)}'
+    done < '~{write_lines(tsvs)}'
   >>>
 
   output {
-    File svs_db = 'svs.duckdb'
+    File sv_db = "svs.duckdb"
   }
 }
 
