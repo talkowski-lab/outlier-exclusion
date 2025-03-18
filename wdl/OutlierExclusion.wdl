@@ -11,7 +11,7 @@ workflow OutlierExclusion {
     String docker
 
     # MakeSVCountsDB
-    Array[String] svtypes_to_filter = ['DEL;5000;25000', 'DUP;5000;25000']
+    Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
 
     # DetermineOutlierSamples -------------------------------------------------
     File wgd_scores
@@ -340,7 +340,7 @@ task MakeSVsDB {
 task MakeSVCountsDB {
   input {
     File svs_db
-    Array[String] svtypes_to_filter
+    Array[Array[String]] svtypes_to_filter
 
     String runtime_docker
   }
@@ -368,9 +368,9 @@ task MakeSVCountsDB {
         max_svlen DOUBLE
     );
     COPY sv_filters
-    FROM '~{write_lines(svtypes_to_filter)}' (
+    FROM '~{write_tsv(svtypes_to_filter)}' (
         FORMAT CSV,
-        DELIMITER ';',
+        DELIMITER '\t',
         HEADER false
     );
     CREATE SEQUENCE id_sequence START 1;
