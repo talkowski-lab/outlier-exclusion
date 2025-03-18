@@ -5,14 +5,14 @@ workflow OutlierExclusion {
 
     File? optional
 
+    # GetContigFromVcf --------------------------------------------------------
     File contigs_file
 
-    # GetContigsArray ---------------------------------------------------------
     File join_raw_calls_vcf
     File join_raw_calls_vcf_index
     String docker
 
-    # MakeSVCountsDB
+    # MakeSvCountsDb ----------------------------------------------------------
     Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
 
     # DetermineOutlierSamples -------------------------------------------------
@@ -81,16 +81,16 @@ workflow OutlierExclusion {
         runtime_docker = docker
     }
 
-    call MakeSVCountsDB {
+    call MakeSvCountsDb {
       input:
-        svs_db = MakeSvDb.sv_db,
-        svtypes_to_filter = svtypes_to_filter,
+        sv_db = MakeSvDb.sv_db,
+        filters = svtypes_to_filter,
         runtime_docker = docker
     }
 
     call DetermineOutlierSamples {
       input:
-        sv_counts_db = MakeSVCountsDB.sv_counts_db,
+        sv_counts_db = MakeSvCountsDb.sv_counts_db,
         wgd_scores = wgd_scores,
         min_wgd_score = min_wgd_score,
         max_wgd_score = max_wgd_score,
@@ -314,6 +314,7 @@ task MakeJoinRawCallsClustersDb {
   }
 }
 
+# Make a database of SVs from a set of TSVs in the format output by ConvertBcfToTsv.
 task MakeSvDb {
   input {
     Array[File] tsvs
@@ -356,18 +357,20 @@ task MakeSvDb {
   }
 }
 
-task MakeSVCountsDB {
+# Make a database of SV counts given the database from MakeSvDb and a set of filters
+# which determine the SV types and size ranges to summarize.
+task MakeSvCountsDb {
   input {
-    File svs_db
-    Array[Array[String]] svtypes_to_filter
-
+    File sv_db
+    Array[Array[String]] filters
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(svs_db, 'GB')) + 16
+  Int disk_size_gb = ceil(size(sv_db, "GB") * 1.2) + 16
+
   runtime {
-    memory: '2GiB'
-    disks: 'local-disk ${disk_size_gb} HDD'
+    memory: "2 GiB"
+    disks: "local-disk ${disk_size_gb} HDD"
     cpus: 1
     preemptible: 3
     maxRetries: 1
@@ -387,7 +390,7 @@ task MakeSVCountsDB {
         max_svlen DOUBLE
     );
     COPY sv_filters
-    FROM '~{write_tsv(svtypes_to_filter)}' (
+    FROM '~{write_tsv(filters)}' (
         FORMAT CSV,
         DELIMITER '\t',
         HEADER false
@@ -403,11 +406,11 @@ task MakeSVCountsDB {
     WHERE isfinite(max_svlen);
     EOF
 
-    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb '~{svs_db}'
+    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb '~{sv_db}'
   >>>
 
   output {
-    File sv_counts_db = 'sv_counts.duckdb'
+    File sv_counts_db = "sv_counts.duckdb"
   }
 }
 
