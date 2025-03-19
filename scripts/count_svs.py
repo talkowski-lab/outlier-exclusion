@@ -1,3 +1,41 @@
+"""Count SVs per sample in a DuckDB database
+
+usage: python count_svs.py <counts_db> <sv_db>
+
+Given a database of filters in <counts_db> and a database of SVs in <sv_db>,
+count the number of SVs per sample in <sv_db> corresponding to the filters in
+<counts_db>. Each filter defines a SV type and SV size range combination to
+count.
+
+==================
+| schema <sv_db> |
+==================
+CREATE TABLE svs (
+    vid VARCHAR,
+    svtype VARCHAR,
+    svlen INTEGER,
+    sample VARCHAR
+);
+
+======================
+| schema <counts_db> |
+======================
+CREATE TABLE sv_filters (
+    svtype VARCHAR,
+    min_svlen DOUBLE,
+    max_svlen DOUBLE
+);
+CREATE SEQUENCE id_sequence START 1;
+ALTER TABLE sv_filters ADD COLUMN id INTEGER DEFAULT nextval('id_sequence');
+
+
+For each 'id' in the 'sv_filters' table, a table of the form
+'sv_counts_{id}' will be written to <counts_db> containing the SV counts
+per sample for the corresponding filter.
+
+EXISTING TABLES WILL BE OVERWRITTEN!
+"""
+
 import sys
 from pathlib import Path
 
@@ -23,7 +61,7 @@ def count_svs(con, filter_id):
     sql = (
         f"CREATE OR REPLACE TABLE sv_counts_{filter_id}"
         " AS SELECT sample, COUNT(*) AS count"
-        " FROM svs_db.svs"
+        " FROM sv_db.svs"
         " WHERE svtype = ? AND svlen >= ? AND svlen <= ?"
         " GROUP BY sample"
     )
@@ -32,15 +70,15 @@ def count_svs(con, filter_id):
 
 
 counts_db = Path(sys.argv[1])
-svs_db = Path(sys.argv[2])
+sv_db = Path(sys.argv[2])
 if not counts_db.is_file():
     raise FileNotFoundError("Counts database not found")
-if not svs_db.is_file():
-    raise FileNotFoundError("SVs database not found")
+if not sv_db.is_file():
+    raise FileNotFoundError("SV database not found")
 
 with duckdb.connect(counts_db) as con:
     validate_filters(con)
-    con.sql(f"ATTACH '{svs_db}' AS svs_db;")
+    con.sql(f"ATTACH '{sv_db}' AS sv_db;")
     filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
     for i in filter_ids:
         count_svs(con, i[0])

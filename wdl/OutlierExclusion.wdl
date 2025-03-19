@@ -16,9 +16,10 @@ workflow OutlierExclusion {
     Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
 
     # DetermineOutlierSamples -------------------------------------------------
-    File wgd_scores
-    Float min_wgd_score = -0.2
-    Float max_wgd_score = 0.2
+    # See DetermineOutlierSamples task for description of inputs.
+    File? wgd_scores
+    Float? min_wgd_score
+    Float? max_wgd_score
     Float iqr_multiplier = 8.0
     File? outlier_samples
 
@@ -158,8 +159,7 @@ workflow OutlierExclusion {
   }
 }
 
-# Extract a single contig from a VCF and output as a BCF without any format
-# fields.
+# Extract a single contig from a VCF and output as a BCF.
 task GetContigFromVcf {
   input {
     File vcf
@@ -239,7 +239,7 @@ task ConvertBcfToTsv {
   }
 }
 
-# Extract the SV clusters from a JoinedRawCalls BCF.
+# Extract the SV clusters from a JoinRawCalls BCF.
 # The output is a tab-delimited file with the JoinedRawCalls variant ID in the
 # first column and member variant ID (from ClusterBatch VCFs) in the second,
 # one row per cluster member.
@@ -414,19 +414,26 @@ task MakeSvCountsDb {
   }
 }
 
+# Find outlier samples based on SV counts and optionally WGS score.
 task DetermineOutlierSamples {
   input {
     File sv_counts_db
-    File wgd_scores
-    Float min_wgd_score
-    Float max_wgd_score
+    # TSV of WGD scores of all samples. Sample ID in column 1, score in column 2.
+    # Outliers found by WGD score will be used to call outlier variants across all SV types.
+    File? wgd_scores
+    # Samples with WGD less than this are outliers
+    Float min_wgd_score = -0.2
+    # Samples with WGD greater than this are outliers
+    Float max_wgd_score = 0.2
+    # Scaling factor for the SV counts per sample IQR. Samples with greater than
+    # IQR * iqr_multiplier number of SVs are outliers.
     Float iqr_multiplier
 
     String runtime_docker
   }
 
   Float input_size = size([sv_counts_db, wgd_scores], 'GB')
-  Int disk_size_gb = ceil(input_size) + 16
+  Int disk_size_gb = ceil(input_size * 1.2) + 16
 
   command <<<
     set -o errexit
@@ -437,31 +444,33 @@ task DetermineOutlierSamples {
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_samples.py' \
       sv_counts_with_outliers.duckdb \
       '~{iqr_multiplier}' \
-      '~{wgd_scores}' \
-      '~{min_wgd_score}' \
-      '~{max_wgd_score}'
+      ~{if defined(wgd_scores) then "--wgd-scores '" + wgd_scores + "'" else ""} \
+      ~{if defined(wgd_scores) then "--min-wgd-score " + min_wgd_score else ""} \
+      ~{if defined(wgd_scores) then "--max-wgd-score " + max_wgd_score else ""}
 
     python3 '/opt/outlier-exclusion/scripts/dump_outlier_samples.py' \
       sv_counts_with_outliers.duckdb \
+      wgd_outliers.tsv \
       dump
 
-    printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > outlier_samples.tsv
-    find dump -type f -name '*.tsv' -exec cat '{}' \; >> outlier_samples.tsv
+    printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > sv_count_outlier_samples.tsv
+    find dump -type f -name '*.tsv' -exec cat '{}' \; >> sv_count_outlier_samples.tsv
   >>>
 
   runtime {
-    memory: '1GiB'
+    memory: "1 GiB"
     cpu: 1
     bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
+    disks: "local-disk ${disk_size_gb} HDD"
     preemptible: 1
     maxRetries: 1
     docker: runtime_docker
   }
 
   output {
-    File sv_counts_db_with_outliers = 'sv_counts_with_outliers.duckdb'
-    File outlier_samples = 'outlier_samples.tsv'
+    File sv_counts_db_with_outliers = "sv_counts_with_outliers.duckdb"
+    File outlier_samples = "sv_count_outlier_samples.tsv"
+    File wgd_outlier_samples = "wgd_outlier_samples.tsv"
   }
 }
 
