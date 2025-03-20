@@ -9,6 +9,10 @@ ARG HTSLIB_URI="https://github.com/samtools/htslib/releases/download/${HTSLIB_VE
 
 ENV PIP_ROOT_USER_ACTION=ignore
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gawk \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir "duckdb==${DUCKDB_VERSION}"
 
 RUN curl -L -o duckdb_cli-linux-amd64.zip "${DUCKDB_URI}" \
