@@ -43,7 +43,7 @@ RUN curl -L -o htslib.tar.bz2 "${HTSLIB_URI}" \
 
 CMD ["bash"]
 
-FROM base as pipeline
+FROM base AS pipeline
 
 RUN mkdir -p /opt/outlier-exclusion/scripts
 
