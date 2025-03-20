@@ -4,7 +4,10 @@ from pathlib import Path
 import duckdb
 
 
+# Flags to indicate the type of the outlier samples database being used.
+# Outlier samples are from a custom list.
 OUTLIER_SAMPLES_FROM_LIST = 0
+# Outlier samples are from SV counts.
 OUTLIER_SAMPLES_FROM_FILTERS = 1
 
 
@@ -34,9 +37,8 @@ def find_outliers_from_filter(con, filter_id, min_prop):
         " FROM jrc_db.jrc_clusters l"
         f" JOIN var_db.outliers_{filter_id} r ON (l.member = r.vid);"
     )
-    outliers = set([x[0] for x in con.sql(sql).fetchall()])
 
-    return outliers
+    return [x[0] for x in con.sql(sql).fetchall()]
 
 
 def find_outliers_from_list(con, i, svtype, min_prop):
@@ -62,9 +64,8 @@ def find_outliers_from_list(con, i, svtype, min_prop):
         " FROM jrc_db.jrc_clusters l"
         f" JOIN var_db.outliers_{i} r ON (l.member = r.vid);"
     )
-    outliers = set([x[0] for x in con.sql(sql).fetchall()])
 
-    return outliers
+    return [x[0] for x in con.sql(sql).fetchall()]
 
 
 def find_outlier_variants(con, min_prop, ols_dbtype):
@@ -75,7 +76,7 @@ def find_outlier_variants(con, min_prop, ols_dbtype):
             for i, sv in enumerate(svtypes)
         ]
 
-        return set().union(*outliers)
+        return [x for sublist in outliers for x in sublist]
     else:
         sql = "SELECT id FROM sv_filters;"
         filter_ids = con.sql(sql).fetchall()
@@ -102,12 +103,13 @@ def find_outlier_variants(con, min_prop, ols_dbtype):
             " FROM jrc_db.jrc_clusters l"
             f" JOIN var_db.wgd_outliers r ON (l.member = r.vid)"
         )
-        wgd_outliers = set([x[0] for x in con.sql(sql).fetchall()])
+        wgd_outliers = [x[0] for x in con.sql(sql).fetchall()]
 
-        return set().union(*count_outliers).union(wgd_outliers)
+        return [x for sublist in count_outliers for x in sublist] + wgd_outliers
 
 
 def detect_outlier_samples_db_type(con):
+    """Guess the type of outlier samples database that is connected."""
     tables = con.sql("SHOW TABLES;").fetchall()
     if len(tables) == 0:
         raise ValueError("Outlier samples database has no tables")
@@ -119,26 +121,24 @@ def detect_outlier_samples_db_type(con):
 
 outlier_samples_db = Path(sys.argv[1])
 jrc_clusters_db = Path(sys.argv[2])
-variants_db_dir = Path(sys.argv[3])
+variants_db = Path(sys.argv[3])
 min_outlier_sample_prop = float(sys.argv[4])
+
 if not outlier_samples_db.is_file():
     raise FileNotFoundError("Outlier samples database not found")
 if not jrc_clusters_db.is_file():
-    raise FileNotFoundError("Joined raw calls clusters database not found")
-if not variants_db_dir.is_dir():
-    raise FileNotFoundError("Variants database directory not found")
+    raise FileNotFoundError("JoinRawCalls clusters database not found")
+if not variants_db.is_file():
+    raise FileNotFoundError("Variants database not found")
 if min_outlier_sample_prop < 0 or min_outlier_sample_prop > 1:
     raise ValueError("Min outlier sample proportion must be [0, 1]")
 
 
-outliers = []
 with duckdb.connect(outlier_samples_db) as con:
     ols_dbtype = detect_outlier_samples_db_type(con)
     con.sql(f"ATTACH '{jrc_clusters_db}' AS jrc_db;")
-    for db in variants_db_dir.glob("*.duckdb"):
-        con.sql(f"ATTACH '{db}' AS var_db;")
-        outliers.append(find_outlier_variants(con, min_outlier_sample_prop, ols_dbtype))
-        con.sql("DETACH var_db;")
+    con.sql(f"ATTACH '{variants_db}' AS var_db;")
+    outliers = find_outlier_variants(con, min_outlier_sample_prop, ols_dbtype)
 
-for vid in set().union(*outliers):
+for vid in outliers:
     print(vid)
