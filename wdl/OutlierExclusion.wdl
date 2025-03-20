@@ -137,7 +137,8 @@ workflow OutlierExclusion {
   output {
     File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
     File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
-    File? determined_outlier_samples = DetermineOutlierSamples.outlier_samples
+    File? sv_count_outlier_samples = DetermineOutlierSamples.outlier_samples
+    File? wgd_outlier_samples = DetermineOutlierSamples.wgd_outlier_samples
   }
 }
 
