@@ -38,11 +38,12 @@ EXISTING TABLES WILL BE OVERWRITTEN!
 
 import sys
 from pathlib import Path
+from collections.abc import Sequence
 
 import duckdb
 
 
-def validate_filters(con):
+def validate_filters(con: duckdb.DuckDBPyConnection):
     sql = "SELECT svtype, min_svlen, max_svlen FROM sv_filters;"
     filters = con.sql(sql).fetchall()
     for f in filters:
@@ -52,7 +53,7 @@ def validate_filters(con):
             raise ValueError("Min SV length must be <= max SV length")
 
 
-def count_svs(con, filter_id):
+def count_svs(con: duckdb.DuckDBPyConnection, filter_id: int):
     sql = """SELECT svtype, min_svlen, max_svlen
     FROM sv_filters
     WHERE id = ?;
@@ -69,16 +70,39 @@ def count_svs(con, filter_id):
     con.execute(sql, list(filters[0]))
 
 
-counts_db = Path(sys.argv[1])
-sv_db = Path(sys.argv[2])
-if not counts_db.is_file():
-    raise FileNotFoundError("Counts database not found")
-if not sv_db.is_file():
-    raise FileNotFoundError("SV database not found")
+def make_tables(counts_db: Path, sv_db: Path):
+    with duckdb.connect(counts_db) as con:
+        validate_filters(con)
+        con.sql(f"ATTACH '{sv_db}' AS sv_db;")
+        filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
+        for i in filter_ids:
+            count_svs(con, i[0])
 
-with duckdb.connect(counts_db) as con:
-    validate_filters(con)
-    con.sql(f"ATTACH '{sv_db}' AS sv_db;")
-    filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
-    for i in filter_ids:
-        count_svs(con, i[0])
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Count SVs per sample")
+    parser.add_argument(
+        "counts_db",
+        meta="COUNTS_DB",
+        type=Path,
+        help="Path to the SV counts DuckDB database",
+    )
+    parser.add_argument(
+        "sv_db", meta="SV_DB", type=Path, help="Path to the SV DuckDB database"
+    )
+    args = parser.parse_args(argv)
+
+    retval = 0
+
+    if not args.counts_db.is_file():
+        raise FileNotFoundError("Counts database must exist")
+    if not args.sv_db.is_file():
+        raise FileNotFoundError("SV database must exist")
+
+    make_tables(args.counts_db, args.sv_db)
+
+    return retval
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
