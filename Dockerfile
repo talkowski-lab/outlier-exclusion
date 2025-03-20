@@ -1,6 +1,6 @@
-FROM python:3.12.7-bookworm
+FROM python:3.13.2-bookworm
 
-ARG DUCKDB_VERSION="1.1.1"
+ARG DUCKDB_VERSION="1.2.1"
 ARG DUCKDB_URI="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
 ARG BCFTOOLS_VERSION="1.21"
 ARG BCFTOOLS_URI="https://github.com/samtools/bcftools/releases/download/${BCFTOOLS_VERSION}/bcftools-${BCFTOOLS_VERSION}.tar.bz2"
@@ -40,5 +40,6 @@ RUN curl -L -o htslib.tar.bz2 "${HTSLIB_URI}" \
 RUN mkdir -p /opt/outlier-exclusion/scripts
 
 COPY scripts/*.py /opt/outlier-exclusion/scripts/
+COPY scripts/*.awk /opt/outlier-exclusion/scripts/
 
 CMD ["bash"]
