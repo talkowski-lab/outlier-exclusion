@@ -1,4 +1,4 @@
-FROM python:3.13.2-bookworm
+FROM python:3.13.2-bookworm AS base
 
 ARG DUCKDB_VERSION="1.2.1"
 ARG DUCKDB_URI="https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip"
@@ -41,9 +41,11 @@ RUN curl -L -o htslib.tar.bz2 "${HTSLIB_URI}" \
   && cd .. \
   && rm -rf "htslib-${HTSLIB_VERSION}" htslib.tar.bz2
 
+CMD ["bash"]
+
+FROM base as pipeline
+
 RUN mkdir -p /opt/outlier-exclusion/scripts
 
 COPY scripts/*.py /opt/outlier-exclusion/scripts/
 COPY scripts/*.awk /opt/outlier-exclusion/scripts/
-
-CMD ["bash"]
