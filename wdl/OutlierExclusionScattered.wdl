@@ -26,7 +26,14 @@ workflow OutlierExclusionScattered {
     Array[File] filter_genotypes_vcfs
 
     String docker
-    String output_prefix
+
+    # Same length as filter_genotypes_vcfs to give each output VCF a different
+    # prefix
+    Array[String]? output_prefix_list
+    # File with one line per prefix to give each output VCF a different prefix
+    File? output_prefix_file
+    # Single prefix to use for all output VCFs
+    String? output_prefix
   }
 
   scatter (vcf in join_raw_calls_vcfs) {
@@ -102,11 +109,14 @@ workflow OutlierExclusionScattered {
     }
   }
 
-  scatter (vcf in filter_genotypes_vcfs) {
+  Array[String]? prefix_list = if (!defined(output_prefix_list) && defined(output_prefix_file)) then read_lines(select_first([output_prefix_file])) else output_prefix_list
+  String static_prefix = select_first([output_prefix, ""])
+
+  scatter (i in range(length(filter_genotypes_vcfs))) {
     call oe.FlagOutlierVariants {
       input:
-        output_prefix = output_prefix,
-        filter_genotypes_vcf = vcf,
+        output_prefix = if defined(prefix_list) then select_first([prefix_list])[i] else static_prefix,
+        filter_genotypes_vcf = filter_genotypes_vcfs[i],
         outlier_variants = DetermineOutlierVariants.outlier_variants,
         runtime_docker = docker
     }
