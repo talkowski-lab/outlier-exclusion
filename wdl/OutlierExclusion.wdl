@@ -27,7 +27,6 @@ workflow OutlierExclusion {
     File? outlier_samples
 
     # DetermineOutlierVariants ------------------------------------------------
-    Array[String] batch_ids
     Array[File]? clustered_depth_vcfs
     Array[File]? clustered_manta_vcfs
     Array[File]? clustered_wham_vcfs
@@ -36,9 +35,8 @@ workflow OutlierExclusion {
     Float min_outlier_sample_prop = 1.0
 
     # FlagOutlierVariants -----------------------------------------------------
-    File filtered_vcf
-    File filtered_vcf_index
-    String cohort_prefix
+    File filter_genotypes_vcf
+    String output_prefix
   }
 
   Array[String] contigs = read_lines(contigs_file)
@@ -54,15 +52,14 @@ workflow OutlierExclusion {
 
     call GetJoinRawCallsClusters {
       input:
-        bcf = GetContigFromVcf.contig_bcf,
+        vcf_or_bcf = GetContigFromVcf.contig_bcf,
         runtime_docker = docker
     }
 
     if (!defined(outlier_samples)) {
-      call ConvertBcfToTsv {
+      call ConvertVcfOrBcfToTsv {
         input:
-          bcf = GetContigFromVcf.contig_bcf,
-          bcf_index = GetContigFromVcf.contig_bcf_index,
+          vcf_or_bcf = GetContigFromVcf.contig_bcf,
           runtime_docker = docker
       }
     }
@@ -74,10 +71,10 @@ workflow OutlierExclusion {
       runtime_docker = docker
   }
 
-  if (defined(ConvertBcfToTsv.tsv)) {
+  if (defined(ConvertVcfOrBcfToTsv.tsv)) {
     call MakeSvDb {
       input:
-        tsvs = select_all(ConvertBcfToTsv.tsv),
+        tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
         runtime_docker = docker
     }
 
@@ -127,9 +124,8 @@ workflow OutlierExclusion {
 
   call FlagOutlierVariants {
     input:
-      cohort_prefix = cohort_prefix,
-      filtered_vcf = filtered_vcf,
-      filtered_vcf_index = filtered_vcf_index,
+      output_prefix = output_prefix,
+      filter_genotypes_vcf = filter_genotypes_vcf,
       outlier_variants = DetermineOutlierVariants.outlier_variants,
       runtime_docker = docker
   }
@@ -179,30 +175,29 @@ task GetContigFromVcf {
   }
 }
 
-# Reformat a BCF into a TSV that can be ingested by the SV counting task.
+# Reformat a VCF or BCF into a TSV that can be ingested by the SV counting task.
 # The columns are:
 # "variant ID" "SV type" "SV length" "sample ID"
 # one row per carrier.
-task ConvertBcfToTsv {
+task ConvertVcfOrBcfToTsv {
   input {
-    File bcf
-    File bcf_index
+    File vcf_or_bcf
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(bcf, 'GB') * 2.0) + 16
+  Int disk_size_gb = ceil(size(vcf_or_bcf, "GB") * 2.0) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 16
+    cpus: 1
+    disks: "local-disk ${disk_size_gb} HDD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 3
   }
 
-  String output_prefix = basename(bcf, ".bcf")
+  String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
   String output_tsv = "${output_prefix}-tidy.tsv.gz"
 
   command <<<
@@ -210,7 +205,7 @@ task ConvertBcfToTsv {
     set -o nounset
     set -o pipefail
 
-    bcftools view --output-type u --include '(FILTER = "." || FILTER = "PASS") && INFO/SVLEN != "." && INFO/SVLEN > 0' '~{bcf}' \
+    bcftools view --output-type u --include '(FILTER = "." || FILTER = "PASS") && INFO/SVLEN != "." && INFO/SVLEN > 0' '~{vcf_or_bcf}' \
       | bcftools view --output-type u --exclude 'INFO/SVTYPE = "BND"' \
       | bcftools query --include 'GT ~ "1"' --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
       | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
@@ -222,17 +217,17 @@ task ConvertBcfToTsv {
   }
 }
 
-# Extract the SV clusters from a JoinRawCalls BCF.
+# Extract the SV clusters from a JoinRawCalls VCF or BCF.
 # The output is a tab-delimited file with the JoinedRawCalls variant ID in the
 # first column and member variant ID (from ClusterBatch VCFs) in the second,
 # one row per cluster member.
 task GetJoinRawCallsClusters {
   input {
-    File bcf
+    File vcf_or_bcf
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(bcf, "GB") * 1.2) + 16
+  Int disk_size_gb = ceil(size(vcf_or_bcf, "GB") * 1.2) + 16
 
   runtime {
     memory: "1 GiB"
@@ -244,20 +239,21 @@ task GetJoinRawCallsClusters {
     bootDiskSizeGb: 16
   }
 
-  String bcf_prefix = basename(bcf, ".bcf")
+  String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
+  String output_tsv = "${output_prefix}-sv_clusters.tsv.gz"
 
   command <<<
     set -o errexit
     set -o nounset
     set -o pipefail
 
-    bcftools query --format '%ID\t%INFO/MEMBERS\n' '~{bcf}' \
+    bcftools query --format '%ID\t%INFO/MEMBERS\n' '~{vcf_or_bcf}' \
       | awk -F'\t' '$2 {split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      | gzip -c > '~{bcf_prefix}-sv_clusters.tsv.gz'
+      | gzip -c > '~{output_tsv}'
   >>>
 
   output {
-    File clusters = "${bcf_prefix}-sv_clusters.tsv.gz"
+    File clusters = output_tsv
   }
 }
 
@@ -297,7 +293,7 @@ task MakeJoinRawCallsClustersDb {
   }
 }
 
-# Make a database of SVs from a set of TSVs in the format output by ConvertBcfToTsv.
+# Make a database of SVs from a set of TSVs in the format output by ConvertVcfOrBcfToTsv.
 task MakeSvDb {
   input {
     Array[File] tsvs
@@ -550,27 +546,31 @@ task DetermineOutlierVariants {
   }
 }
 
+# Add an OUTLIER filter flag to outlier enriched variants in FilterGenotypes VCF.
 task FlagOutlierVariants {
   input {
-    String cohort_prefix
-    File filtered_vcf
-    File filtered_vcf_index
+    String output_prefix
+    File filter_genotypes_vcf
     Array[File] outlier_variants
 
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(filtered_vcf, 'GB') * 2.0) + 16
+  Int disk_size_gb = ceil(size(filter_genotypes_vcf, "GB") * 2.0 + size(outlier_variants, "GB")) + 16
 
   runtime {
-    memory: '2GiB'
-    cpu: 4
     bootDiskSizeGb: 16
-    disks: 'local-disk ${disk_size_gb} HDD'
-    preemptible: 3
-    maxRetries: 1
+    cpu: 1
+    disks: "local-disk ${disk_size_gb} HDD"
     docker: runtime_docker
+    maxRetries: 1
+    memory: "2 GiB"
+    preemptible: 3
   }
+
+
+  String output_vcf = "${output_prefix}-outlier_flagged.vcf.gz"
+  String output_vcf_index = "${output_vcf}.tbi"
 
   command <<<
     set -o errexit
@@ -582,35 +582,14 @@ task FlagOutlierVariants {
     done < '~{write_lines(outlier_variants)}' \
       | LC_ALL=C sort -u > outlier_variants.list
 
-    bcftools query --include 'INFO/TRUTH_VID != ""' \
-      --format '%CHROM\t%POS\t%REF\t%ALT\t%ID\t%INFO/TRUTH_VID\n' \
-      '~{filtered_vcf}' \
-      | LC_ALL=C sort -k6,6 > filtered_vcf_variants.tsv
-    LC_ALL=C join -1 6 -2 1 -o 1.1,1.2,1.3,1.4,1.5 -t $'\t' \
-      filtered_vcf_variants.tsv \
-      outlier_variants.list > filtered_calls_outliers.tsv
-
-    awk -F'\t' '{print $0"\toutlier"}' 'filtered_calls_outliers.tsv' \
-      | sort -k1,1 -k2,2n > annotations.tsv
-    bgzip annotations.tsv
-    tabix --begin 2 --end 2 --sequence 1 annotations.tsv.gz
-
-    printf '##FILTER=<ID=outlier,Description="Variant enriched by outlier samples">' \
-      > header.txt
-
-    bcftools annotate \
-      --annotations annotations.tsv.gz \
-      --columns 'CHROM,POS,REF,ALT,~ID,.FILTER' \
-      --header-lines header.txt \
-      --output '~{cohort_prefix}-outliers_annotated.vcf.gz' \
-      --output-type z \
-      --threads 4 \
-      --write-index=tbi \
-      '~{filtered_vcf}'
+    bgzip -cd '~{filter_genotypes_vcf}' \
+      | gawk -f /opt/outlier-exclusion/scripts/flag_outliers.awk outlier_variants.list - \
+      | bgzip -c > "${output_vcf}"
+    bcftools index --tbi "~{output_vcf}"
   >>>
 
   output {
-    File outlier_annotated_vcf = '~{cohort_prefix}-outliers_annotated.vcf.gz'
-    File outlier_annotated_vcf_index = '~{cohort_prefix}-outliers_annotated.vcf.gz.tbi'
+    File outlier_annotated_vcf = output_vcf
+    File outlier_annotated_vcf_index = output_vcf_index
   }
 }
