@@ -10,7 +10,8 @@ workflow OutlierExclusion {
 
     File join_raw_calls_vcf
     File join_raw_calls_vcf_index
-    String docker
+    String base_docker
+    String pipeline_docker
 
     # MakeSvCountsDb ----------------------------------------------------------
     Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
@@ -47,20 +48,20 @@ workflow OutlierExclusion {
         vcf = join_raw_calls_vcf,
         vcf_index = join_raw_calls_vcf_index,
         contig = contig,
-        runtime_docker = docker
+        runtime_docker = base_docker
     }
 
     call GetJoinRawCallsClusters {
       input:
         vcf_or_bcf = GetContigFromVcf.contig_bcf,
-        runtime_docker = docker
+        runtime_docker = base_docker
     }
 
     if (!defined(outlier_samples)) {
       call ConvertVcfOrBcfToTsv {
         input:
           vcf_or_bcf = GetContigFromVcf.contig_bcf,
-          runtime_docker = docker
+          runtime_docker = base_docker
       }
     }
   }
@@ -68,21 +69,15 @@ workflow OutlierExclusion {
   call MakeJoinRawCallsClustersDb {
     input:
       clusters = GetJoinRawCallsClusters.clusters,
-      runtime_docker = docker
+      runtime_docker = base_docker
   }
 
   if (defined(ConvertVcfOrBcfToTsv.tsv)) {
-    call MakeSvDb {
-      input:
-        tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
-        runtime_docker = docker
-    }
-
     call MakeSvCountsDb {
       input:
-        sv_db = MakeSvDb.sv_db,
+        tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
         filters = svtypes_to_filter,
-        runtime_docker = docker
+        runtime_docker = pipeline_docker
     }
 
     call DetermineOutlierSamples {
@@ -92,7 +87,7 @@ workflow OutlierExclusion {
         min_wgd_score = min_wgd_score,
         max_wgd_score = max_wgd_score,
         iqr_multiplier = iqr_multiplier,
-        runtime_docker = docker
+        runtime_docker = pipeline_docker
     }
   }
 
@@ -100,7 +95,7 @@ workflow OutlierExclusion {
     call FormatOutlierSamples {
       input:
         outlier_samples = select_first([outlier_samples]),
-        runtime_docker = docker
+        runtime_docker = base_docker
     }
   }
 
@@ -118,7 +113,7 @@ workflow OutlierExclusion {
         outlier_samples_db = outlier_samples_db,
         min_outlier_sample_prop = min_outlier_sample_prop,
         jrc_clusters_db = MakeJoinRawCallsClustersDb.jrc_clusters_db,
-        runtime_docker = docker
+        runtime_docker = pipeline_docker
     }
   }
 
@@ -127,7 +122,7 @@ workflow OutlierExclusion {
       output_prefix = output_prefix,
       filter_genotypes_vcf = filter_genotypes_vcf,
       outlier_variants = DetermineOutlierVariants.outlier_variants,
-      runtime_docker = docker
+      runtime_docker = pipeline_docker
   }
 
   output {
@@ -156,7 +151,7 @@ task GetContigFromVcf {
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
   }
 
   String output_bcf = "${contig}.bcf"
@@ -188,7 +183,7 @@ task ConvertVcfOrBcfToTsv {
   Int disk_size_gb = ceil(size(vcf_or_bcf, "GB") * 2.0) + 16
 
   runtime {
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
     cpus: 1
     disks: "local-disk ${disk_size_gb} HDD"
     docker: runtime_docker
@@ -236,7 +231,7 @@ task GetJoinRawCallsClusters {
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
   }
 
   String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
@@ -273,7 +268,7 @@ task MakeJoinRawCallsClustersDb {
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
   }
 
   command <<<
@@ -293,23 +288,25 @@ task MakeJoinRawCallsClustersDb {
   }
 }
 
-# Make a database of SVs from a set of TSVs in the format output by ConvertVcfOrBcfToTsv.
-task MakeSvDb {
+# Make a database of SVs from a set of TSVs in the format output by ConvertVcfOrBcfToTsv
+# and then make a database of SV counts per sample.
+task MakeSvCountsDb {
   input {
     Array[File] tsvs
+    Array[Array[String]] filters
     String runtime_docker
   }
 
-  Int disk_size_gb = ceil(size(tsvs, "GB") * 1.2) + 16
+  Int disk_size_gb = ceil(size(tsvs, "GB") * 2) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
+    memory: "8 GiB"
+    disks: "local-disk ${disk_size_gb} SSD"
+    cpus: 4
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
   }
 
   command <<<
@@ -325,42 +322,10 @@ task MakeSvDb {
         sample VARCHAR
     );
     EOF
-
-    while read -r f; do
-      duckdb svs.duckdb "COPY svs FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
-    done < '~{write_lines(tsvs)}'
-  >>>
-
-  output {
-    File sv_db = "svs.duckdb"
-  }
-}
-
-# Make a database of SV counts given the database from MakeSvDb and a set of filters
-# which determine the SV types and size ranges to summarize.
-task MakeSvCountsDb {
-  input {
-    File sv_db
-    Array[Array[String]] filters
-    String runtime_docker
-  }
-
-  Int disk_size_gb = ceil(size(sv_db, "GB") * 1.2) + 16
-
-  runtime {
-    memory: "2 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
-    bootDiskSizeGb: 16
-  }
-
-  command <<<
-    set -o errexit
-    set -o nounset
-    set -o pipefail
+    touch load.sql
+    gawk '{print "COPY svs FROM \047$0\047 (FORMAT CSV, DELIMITER '\t', HEADER false);"}' \
+      '~{write_lines(tsvs)}' >> load.sql
+    duckdb svs.duckdb < load.sql
 
     duckdb sv_counts.duckdb << 'EOF'
     CREATE TABLE sv_filters (
@@ -385,7 +350,7 @@ task MakeSvCountsDb {
     WHERE isfinite(max_svlen);
     EOF
 
-    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb '~{sv_db}'
+    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb svs.duckdb
   >>>
 
   output {
@@ -411,8 +376,18 @@ task DetermineOutlierSamples {
     String runtime_docker
   }
 
-  Float input_size = size([sv_counts_db, wgd_scores], 'GB')
+  Float input_size = size([sv_counts_db, wgd_scores], "GB")
   Int disk_size_gb = ceil(input_size * 1.2) + 16
+
+  runtime {
+    memory: "1 GiB"
+    cpu: 1
+    bootDiskSizeGb: 8
+    disks: "local-disk ${disk_size_gb} HDD"
+    preemptible: 1
+    maxRetries: 1
+    docker: runtime_docker
+  }
 
   command <<<
     set -o errexit
@@ -435,16 +410,6 @@ task DetermineOutlierSamples {
     printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > sv_count_outlier_samples.tsv
     find dump -type f -name '*.tsv' -exec cat '{}' \; >> sv_count_outlier_samples.tsv
   >>>
-
-  runtime {
-    memory: "1 GiB"
-    cpu: 1
-    bootDiskSizeGb: 16
-    disks: "local-disk ${disk_size_gb} HDD"
-    preemptible: 1
-    maxRetries: 1
-    docker: runtime_docker
-  }
 
   output {
     File sv_counts_db_with_outliers = "sv_counts_with_outliers.duckdb"
@@ -472,7 +437,7 @@ task FormatOutlierSamples {
     preemptible: 3
     maxRetries: 1
     docker: runtime_docker
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
   }
 
   command <<<
@@ -511,7 +476,7 @@ task DetermineOutlierVariants {
   Int disk_size_gb = ceil(input_size) + 16
 
   runtime {
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
     cpu: 1
     disks: "local-disk ${disk_size_gb} HDD"
     docker: runtime_docker
@@ -559,7 +524,7 @@ task FlagOutlierVariants {
   Int disk_size_gb = ceil(size(filter_genotypes_vcf, "GB") * 2.0 + size(outlier_variants, "GB")) + 16
 
   runtime {
-    bootDiskSizeGb: 16
+    bootDiskSizeGb: 8
     cpu: 1
     disks: "local-disk ${disk_size_gb} HDD"
     docker: runtime_docker
@@ -567,7 +532,6 @@ task FlagOutlierVariants {
     memory: "2 GiB"
     preemptible: 3
   }
-
 
   String output_vcf = "${output_prefix}-outlier_flagged.vcf.gz"
   String output_vcf_index = "${output_vcf}.tbi"
