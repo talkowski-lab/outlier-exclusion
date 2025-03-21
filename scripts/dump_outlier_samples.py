@@ -57,7 +57,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="Path to the input SV counts DuckDB datatbase",
     )
-    parse.add_argument(
+    parser.add_argument(
         "wgd_outliers",
         metavar="WGD_OUTLIERS",
         type=Path,
