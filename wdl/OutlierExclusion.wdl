@@ -322,10 +322,9 @@ task MakeSvCountsDb {
         sample VARCHAR
     );
     EOF
-    touch load.sql
     gawk '{print "COPY svs FROM \047"$0"\047 (FORMAT CSV, DELIMITER \047\\t\047, HEADER false);"}' \
-      '~{write_lines(tsvs)}' >> load.sql
-    duckdb svs.duckdb < load.sql
+      '~{write_lines(tsvs)}' \
+      | duckdb svs.duckdb
 
     duckdb sv_counts.duckdb << 'EOF'
     CREATE TABLE sv_filters (
