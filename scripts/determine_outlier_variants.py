@@ -5,6 +5,7 @@ samples. The proportion of outlier samples in each variant is used to determine
 outlier variants.
 """
 
+import argparse
 import sys
 from pathlib import Path
 

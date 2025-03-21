@@ -37,6 +37,7 @@ EXISTING TABLES WILL BE OVERWRITTEN!
 """
 
 import sys
+import argparse
 from pathlib import Path
 from collections.abc import Sequence
 
