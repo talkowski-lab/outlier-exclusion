@@ -77,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.outdir.is_dir():
         raise ValueError("Output directory exists")
 
-    dump(args.counts_db, args.wgd_outliers, outdir)
+    dump(args.counts_db, args.wgd_outliers, args.outdir)
 
     return retval
 
