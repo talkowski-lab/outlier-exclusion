@@ -323,7 +323,7 @@ task MakeSvCountsDb {
     );
     EOF
     touch load.sql
-    gawk '{print "COPY svs FROM \047$0\047 (FORMAT CSV, DELIMITER '\t', HEADER false);"}' \
+    gawk '{print "COPY svs FROM \047"$0"\047 (FORMAT CSV, DELIMITER '\t', HEADER false);"}' \
       '~{write_lines(tsvs)}' >> load.sql
     duckdb svs.duckdb < load.sql
 
