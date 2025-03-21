@@ -80,10 +80,14 @@ def determine_outliers(
                 raise FileNotFoundError("WGD scores file must exist if given")
             else:
                 load_wgd_table(con, wgd_scores)
+
             if min_wgd is None or max_wgd is None:
                 raise ValueError(
                     "Min and max WGD scores must be given if WGD scores are given"
                 )
+            elif min_wgd > max_wgd:
+                raise ValueError("Min WGD score must be <= max WGD score")
+
             find_wgd_outliers(con, min_wgd, max_wgd)
 
 
@@ -132,8 +136,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileNotFoundError("Counts database must exist")
     if args.iqr_mult < 0:
         raise ValueError("IQR multiplier must be greater than or equal to 0")
-    if args.min_wgd > args.max_wgd:
-        raise ValueError("Min WGD score must be >= max wgd score")
 
     determine_outliers(
         args.sv_counts_db, args.iqr_mult, args.wgd_scores, args.min_wgd, args.max_wgd
