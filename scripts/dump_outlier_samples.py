@@ -6,6 +6,7 @@ necessary for the pipeline, but can be helpful for users.
 
 import argparse
 from pathlib import Path
+from collections.abc import Sequence
 
 import duckdb
 
@@ -25,7 +26,7 @@ def dump_filter_outliers(con, filter_id, outfile):
     con.sql(sql)
 
 
-def dump_sv_counts_outliers(db, outdir):
+def dump_sv_counts_outliers(db: Path, outdir: Path):
     with duckdb.connect(db) as con:
         filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
         for i in filter_ids:
@@ -33,41 +34,53 @@ def dump_sv_counts_outliers(db, outdir):
             dump_outliers(con, i[0], outfile)
 
 
-def dump_wgd_outliers(db, path):
+def dump_wgd_outliers(db: Path, outfile: Path):
     # This seems like a SQL injection vunerability
     with duckdb.connect(db) as con:
-        sql = f"COPY (SELECT sample, score FROM wgd_outliers LEFT JOIN wgd_scores USING(sample)) TO '{path}' (DELIMITER '\\t');"
+        sql = f"COPY (SELECT sample, score FROM wgd_outliers LEFT JOIN wgd_scores USING(sample)) TO '{outfile}' (DELIMITER '\\t');"
         con.sql(sql)
 
 
-def main(args):
-    counts_db = Path(args.sv_counts_db)
-    wgd_outliers = Path(args.wgd_outliers)
-    outdir = Path(args.outdir)
-    if not counts_db.is_file():
-        raise FileNotFoundError("Counts database not found")
-    if wgd_outliers.is_file():
-        raise ValueError("WGD outliers file exists")
-    if outdir.is_dir():
-        raise ValueError("Output directory exists")
+def dump(counts_db: Path, wgd_outliers: Path, outdir: Path):
     outdir.mkdir()
-    dump(counts_db, outdir)
+    dump_sv_counts_outliers(counts_db, outdir)
+    dump_wgd_outliers(wgd_outliers)
 
 
-if __name__ == "__main__":
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Dump outliers sample from DuckDB file"
+        description="Dump outliers sample from DuckDB database"
     )
     parser.add_argument(
-        "sv_counts_db",
+        "counts_db",
         metavar="SV_COUNTS_DB",
+        type=Path,
         help="Path to the input SV counts DuckDB datatbase",
     )
     parse.add_argument(
         "wgd_outliers",
         metavar="WGD_OUTLIERS",
+        type=Path,
         help="Where to write the table of WGD outliers",
     )
-    parser.add_argument("outdir", metavar="OUTDIR", help="Path to the output directory")
+    parser.add_argument(
+        "outdir", metavar="OUTDIR", type=Path, help="Path to the output directory"
+    )
+    args = parser.parse_args(argv)
 
-    main(parser.parse_args())
+    retval = 0
+
+    if not args.counts_db.is_file():
+        raise FileNotFoundError("Counts database not found")
+    if args.wgd_outliers.is_file():
+        raise ValueError("WGD outliers file exists")
+    if args.outdir.is_dir():
+        raise ValueError("Output directory exists")
+
+    dump(args.counts_db, args.wgd_outliers, outdir)
+
+    return retval
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

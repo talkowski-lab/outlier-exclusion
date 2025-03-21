@@ -12,6 +12,7 @@ less than the given min or more than the given max are considered outliers.
 
 import argparse
 from pathlib import Path
+from collections.abc import Sequence
 
 import duckdb
 

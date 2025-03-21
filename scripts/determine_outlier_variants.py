@@ -6,8 +6,8 @@ outlier variants.
 """
 
 import argparse
-import sys
 from pathlib import Path
+from collections.abc import Sequence
 
 import duckdb
 
