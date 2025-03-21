@@ -84,12 +84,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Count SVs per sample")
     parser.add_argument(
         "counts_db",
-        meta="COUNTS_DB",
+        metavar="COUNTS_DB",
         type=Path,
         help="Path to the SV counts DuckDB database",
     )
     parser.add_argument(
-        "sv_db", meta="SV_DB", type=Path, help="Path to the SV DuckDB database"
+        "sv_db", metavar="SV_DB", type=Path, help="Path to the SV DuckDB database"
     )
     args = parser.parse_args(argv)
 
