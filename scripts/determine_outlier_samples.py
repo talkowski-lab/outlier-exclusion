@@ -47,16 +47,17 @@ def find_sv_count_outliers(con: duckdb.DuckDBPyConnection, iqr_mult: float):
 
 def find_wgd_outliers(con: duckdb.DuckDBPyConnection, min_wgd: float, max_wgd: float):
     sql = (
-        "CREATE OR REPLACE TABLE wgd_outliers"
-        " AS SELECT sample"
+        "COPY TO wgd_outliers"
+        " FROM (SELECT sample"
         " FROM wgd_scores"
-        " WHERE score < ? OR score > ?"
+        " WHERE score < ? OR score > ?)"
     )
     con.execute(sql, [min_wgd, max_wgd])
 
 
-def make_wgd_table(con: duckdb.DuckDBPyConnection):
+def make_wgd_tables(con: duckdb.DuckDBPyConnection):
     con.sql("CREATE OR REPLACE TABLE wgd_scores (sample VARCHAR, score FLOAT);")
+    con.sql("CREATE OR REPLACE TABLE wgd_outliers (sample VARCHAR);")
 
 
 def load_wgd_table(con: duckdb.DuckDBPyConnection, scores_path: Path):
@@ -74,21 +75,20 @@ def determine_outliers(
     # TODO Might be sensible to do this in a transaction and roll back on error
     with duckdb.connect(db) as con:
         find_sv_count_outliers(con, iqr_mult)
-        make_wgd_table(con)
+        make_wgd_tables(con)
         if wgd_scores is not None:
             if not wgd_scores.is_file():
                 raise FileNotFoundError("WGD scores file must exist if given")
             else:
                 load_wgd_table(con, wgd_scores)
+                if min_wgd is None or max_wgd is None:
+                    raise ValueError(
+                        "Min and max WGD scores must be given if WGD scores are given"
+                    )
+                elif min_wgd > max_wgd:
+                    raise ValueError("Min WGD score must be <= max WGD score")
 
-            if min_wgd is None or max_wgd is None:
-                raise ValueError(
-                    "Min and max WGD scores must be given if WGD scores are given"
-                )
-            elif min_wgd > max_wgd:
-                raise ValueError("Min WGD score must be <= max WGD score")
-
-            find_wgd_outliers(con, min_wgd, max_wgd)
+                find_wgd_outliers(con, min_wgd, max_wgd)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

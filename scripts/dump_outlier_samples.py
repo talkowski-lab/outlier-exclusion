@@ -31,7 +31,7 @@ def dump_sv_counts_outliers(db: Path, outdir: Path):
         filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
         for i in filter_ids:
             outfile = Path(outdir, f"outliers_{i[0]}.tsv")
-            dump_outliers(con, i[0], outfile)
+            dump_filter_outliers(con, i[0], outfile)
 
 
 def dump_wgd_outliers(db: Path, outfile: Path):
@@ -44,7 +44,7 @@ def dump_wgd_outliers(db: Path, outfile: Path):
 def dump(counts_db: Path, wgd_outliers: Path, outdir: Path):
     outdir.mkdir()
     dump_sv_counts_outliers(counts_db, outdir)
-    dump_wgd_outliers(wgd_outliers)
+    dump_wgd_outliers(counts_db, wgd_outliers)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
