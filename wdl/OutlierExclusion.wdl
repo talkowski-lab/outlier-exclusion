@@ -403,7 +403,7 @@ task DetermineOutlierSamples {
 
     python3 '/opt/outlier-exclusion/scripts/dump_outlier_samples.py' \
       sv_counts_with_outliers.duckdb \
-      wgd_outliers.tsv \
+      wgd_outliers_samples.tsv \
       dump
 
     printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > sv_count_outlier_samples.tsv
