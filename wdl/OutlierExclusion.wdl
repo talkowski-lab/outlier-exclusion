@@ -539,9 +539,8 @@ task FlagOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    while read -r f; do
-      cat "${f}"
-    done < '~{write_lines(outlier_variants)}' \
+    cat '~{write_lines(outlier_variants)}' \
+      | xargs cat \
       | LC_ALL=C sort -u > outlier_variants.list
 
     bgzip -cd '~{filter_genotypes_vcf}' \
