@@ -489,20 +489,19 @@ task DetermineOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    duckdb variants.duckdb 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
-    while read -r vcf; do
-      bcftools query --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
-        --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' "$1" \
-        | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t'
-    done < '~{write_lines(clustered_vcfs)}' \
-      | duckdb variants.duckdb "COPY variants FROM '/dev/stdin' (HEADER false, DELIMITER '\t');"
+    bcftools query --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
+      --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
+      --vcf-list '~{write_lines(clustered_vcfs)}' \
+        | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
+        | gzip -c > variants.tsv.gz
+    duckdb variants.duckdb "COPY variants FROM 'variants.tsv.gz' (HEADER false, DELIMITER '\t');"
 
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
       '~{outlier_samples_db}' \
       '~{jrc_clusters_db}' \
       variants.duckdb \
-      '~{min_outlier_sample_prop}' \
-      | LC_ALL=C sort -u > outlier_variants.list
+      outlier_variants.list \
+      '~{min_outlier_sample_prop}'
   >>>
 
   output {

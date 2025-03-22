@@ -134,7 +134,11 @@ def detect_outlier_samples_db_type(con: duckdb.DuckDBPyConnection):
 
 
 def determine_outlier_variants(
-    samples_db: Path, jrc_cluster_db: Path, variants_db: Path, min_prop: float
+    samples_db: Path,
+    jrc_clusters_db: Path,
+    variants_db: Path,
+    output: Path,
+    min_prop: float,
 ):
     with duckdb.connect(samples_db) as con:
         ols_dbtype = detect_outlier_samples_db_type(con)
@@ -142,8 +146,9 @@ def determine_outlier_variants(
         con.sql(f"ATTACH '{variants_db}' AS var_db;")
         outliers = find_outlier_variants(con, min_prop, ols_dbtype)
 
-    for vid in outliers:
-        print(vid)
+    with open(output, "w") as f:
+        for vid in set(outliers):
+            f.write(vid + "\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -162,18 +167,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Path to the JoinRawCalls clusters DuckDB database",
         type=Path,
     )
-    parse.add_argument(
+    parser.add_argument(
         "variants_db",
         metavar="VARIANTS_DB",
         help="Path to the ClusterBatch DuckDB database",
         type=Path,
     )
-    parse.add_argument(
+    parser.add_argument(
+        "output",
+        metavar="OUTPUT",
+        help="Where to write the outlier variants",
+        type=Path,
+    )
+    parser.add_argument(
         "min_prop",
         metavar="MIN_PROP",
         help="Minimum proportion of outlier samples a variant needs to be considered an outlier",
         type=float,
     )
+    args = parser.parse_args(argv)
 
     retval = 0
 
@@ -185,9 +197,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise FileNotFoundError("Variants database not found")
     if args.min_prop < 0 or args.min_prop > 1:
         raise ValueError("Min outlier sample proportion must be [0, 1]")
+    if args.output.is_file():
+        raise ValueError("Output file must not exist")
 
     determine_outlier_variants(
-        args.outlier_samples_db, args.jrc_clusters_db, args.variants_db, args.min_prop
+        args.outlier_samples_db,
+        args.jrc_clusters_db,
+        args.variants_db,
+        args.output,
+        args.min_prop,
     )
 
     return retval
