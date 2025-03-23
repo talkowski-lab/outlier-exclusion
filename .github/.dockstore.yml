@@ -1,4 +1,5 @@
 version: 1.2
+
 workflows:
   - name: OutlierExclusion
     subclass: WDL
@@ -6,6 +7,15 @@ workflows:
     filters:
       branches:
         - main
-        - add-scramble
+      tags:
+        - /.*/
+
+workflows:
+  - name: OutlierExclusionScattered
+    subclass: WDL
+    primaryDescriptorPath: /wdl/OutlierExclusionScattered.wdl
+    filters:
+      branches:
+        - main
       tags:
         - /.*/
