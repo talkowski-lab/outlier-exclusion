@@ -546,7 +546,7 @@ task FlagOutlierVariants {
 
     bgzip -cd '~{filter_genotypes_vcf}' \
       | gawk -f /opt/outlier-exclusion/scripts/flag_outliers.awk outlier_variants.list - \
-      | bgzip -c > "${output_vcf}"
+      | bgzip -c > "~{output_vcf}"
     bcftools index --tbi "~{output_vcf}"
   >>>
 
