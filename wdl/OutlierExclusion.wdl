@@ -2,9 +2,6 @@ version 1.0
 
 workflow OutlierExclusion {
   input {
-
-    File? optional
-
     # GetContigFromVcf --------------------------------------------------------
     File contigs_file
 
