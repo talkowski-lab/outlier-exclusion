@@ -494,6 +494,7 @@ task DetermineOutlierVariants {
       --vcf-list '~{write_lines(clustered_vcfs)}' \
         | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
         | gzip -c > variants.tsv.gz
+    duckdb variants.duckdb 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
     duckdb variants.duckdb "COPY variants FROM 'variants.tsv.gz' (HEADER false, DELIMITER '\t');"
 
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
