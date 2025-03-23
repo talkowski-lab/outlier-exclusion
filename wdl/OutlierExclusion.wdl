@@ -142,13 +142,13 @@ task GetContigFromVcf {
   Int disk_size_gb = ceil(size(vcf, "GB") * 1.2) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 8
+    cpus: 1
+    disks: "local-disk ${disk_size_gb} HDD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 3
   }
 
   String output_bcf = "${contig}.bcf"
@@ -222,13 +222,13 @@ task GetJoinRawCallsClusters {
   Int disk_size_gb = ceil(size(vcf_or_bcf, "GB") * 1.2) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 8
+    cpus: 1
+    disks: "local-disk ${disk_size_gb} HDD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 3
   }
 
   String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
@@ -259,13 +259,13 @@ task MakeJoinRawCallsClustersDb {
   Int disk_size_gb = ceil(size(clusters, "GB")) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 8
+    cpus: 1
+    disks: "local-disk ${disk_size_gb} HDD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 3
   }
 
   command <<<
@@ -297,13 +297,13 @@ task MakeSvCountsDb {
   Int disk_size_gb = ceil(size(tsvs, "GB") * 2) + 16
 
   runtime {
-    memory: "8 GiB"
-    disks: "local-disk ${disk_size_gb} SSD"
-    cpus: 4
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 8
+    cpus: 4
+    disks: "local-disk ${disk_size_gb} SSD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "8 GiB"
+    preemptible: 3
   }
 
   command <<<
@@ -376,13 +376,13 @@ task DetermineOutlierSamples {
   Int disk_size_gb = ceil(input_size * 1.2) + 16
 
   runtime {
-    memory: "1 GiB"
-    cpu: 1
     bootDiskSizeGb: 8
+    cpu: 1
     disks: "local-disk ${disk_size_gb} HDD"
-    preemptible: 1
-    maxRetries: 1
     docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 1
   }
 
   command <<<
@@ -427,13 +427,13 @@ task FormatOutlierSamples {
   Int disk_size_gb = ceil(size(outlier_samples, "GB")) + 16
 
   runtime {
-    memory: "1 GiB"
-    disks: "local-disk ${disk_size_gb} HDD"
-    cpus: 1
-    preemptible: 3
-    maxRetries: 1
-    docker: runtime_docker
     bootDiskSizeGb: 8
+    cpus: 1
+    disks: "local-disk ${disk_size_gb} HDD"
+    docker: runtime_docker
+    maxRetries: 1
+    memory: "1 GiB"
+    preemptible: 3
   }
 
   command <<<
