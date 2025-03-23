@@ -158,7 +158,7 @@ task GetContigFromVcf {
     set -o nounset
     set -o pipefail
 
-    bcftools view --output-type u --regions '~{contig}' --write-index=csi
+    bcftools view --output-type b --regions '~{contig}' --write-index=csi
   >>>
 
   output {
