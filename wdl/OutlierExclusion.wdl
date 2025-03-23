@@ -190,7 +190,7 @@ task ConvertVcfOrBcfToTsv {
   }
 
   String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
-  String output_tsv = "${output_prefix}-tidy.tsv.gz"
+  String output_tsv = "${output_prefix}-tidy.tsv.zst"
 
   command <<<
     set -o errexit
@@ -201,7 +201,7 @@ task ConvertVcfOrBcfToTsv {
       | bcftools view --output-type u --exclude 'INFO/SVTYPE = "BND"' \
       | bcftools query --include 'GT ~ "1"' --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
       | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
-      | gzip -c > '~{output_tsv}'
+      | zstd -q -c > '~{output_tsv}'
   >>>
 
   output {
@@ -232,7 +232,7 @@ task GetJoinRawCallsClusters {
   }
 
   String output_prefix = sub(basename(vcf_or_bcf), "\\.(bcf|vcf\\.gz)$", "")
-  String output_tsv = "${output_prefix}-sv_clusters.tsv.gz"
+  String output_tsv = "${output_prefix}-sv_clusters.tsv.zst"
 
   command <<<
     set -o errexit
@@ -241,7 +241,7 @@ task GetJoinRawCallsClusters {
 
     bcftools query --format '%ID\t%INFO/MEMBERS\n' '~{vcf_or_bcf}' \
       | awk -F'\t' '$2 {split($2, a, /,/); for (i in a) print $1"\t"a[i]}' \
-      | gzip -c > '~{output_tsv}'
+      | zstd -q -c > '~{output_tsv}'
   >>>
 
   output {
@@ -490,9 +490,9 @@ task DetermineOutlierVariants {
       --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
       --vcf-list '~{write_lines(clustered_vcfs)}' \
         | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
-        | gzip -c > variants.tsv.gz
+        | zstd -q -c > variants.tsv.zst
     duckdb variants.duckdb 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
-    duckdb variants.duckdb "COPY variants FROM 'variants.tsv.gz' (HEADER false, DELIMITER '\t');"
+    duckdb variants.duckdb "COPY variants FROM 'variants.tsv.zst' (HEADER false, DELIMITER '\t');"
 
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
       '~{outlier_samples_db}' \
