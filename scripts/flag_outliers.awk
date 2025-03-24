@@ -57,8 +57,11 @@ $8 ~ /TRUTH_VID=/ {
 	if (RSTART && a[1] && (a[1] in variants)) {
 		if ($8 == "PASS" || $8 == ".") {
 			$8 = "OUTLIER"
-		} else {
-			$8 = $8 ",OUTLIER"
+		} else if ($8 !~ /(^OUTLIER$)|(^OUTLIER;)|(;OUTLIER;)|(;OUTLIER$)/) {
+			# Check for the flag first to avoid adding a duplicate.
+			# These cases are needed to ensure the flag is not a
+			# substring of another flag.
+			$8 = $8 ";OUTLIER"
 		}
 	}
 }
