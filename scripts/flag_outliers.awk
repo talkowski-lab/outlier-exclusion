@@ -55,13 +55,13 @@ ARGIND == 1 {
 $8 ~ /TRUTH_VID=/ {
 	match($8, /TRUTH_VID=([^;]+);?/, a)
 	if (RSTART && a[1] && (a[1] in variants)) {
-		if ($8 == "PASS" || $8 == ".") {
-			$8 = "OUTLIER"
-		} else if ($8 !~ /(^OUTLIER$)|(^OUTLIER;)|(;OUTLIER;)|(;OUTLIER$)/) {
+		if ($7 == "PASS" || $7 == ".") {
+			$7 = "OUTLIER"
+		} else if ($7 !~ /(^OUTLIER$)|(^OUTLIER;)|(;OUTLIER;)|(;OUTLIER$)/) {
 			# Check for the flag first to avoid adding a duplicate.
 			# These cases are needed to ensure the flag is not a
 			# substring of another flag.
-			$8 = $8 ";OUTLIER"
+			$7 = $7 ";OUTLIER"
 		}
 	}
 }
