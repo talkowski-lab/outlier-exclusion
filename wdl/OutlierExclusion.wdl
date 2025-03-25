@@ -10,7 +10,7 @@ workflow OutlierExclusion {
     File join_raw_calls_vcf_index
 
     # See MakeSvCountsDb
-    Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
+    Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 25000], ["DUP", 5000, 25000]]
 
     # See DetermineOutlierSamples
     File? wgd_scores
