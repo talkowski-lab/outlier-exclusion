@@ -347,10 +347,9 @@ task MakeJoinRawCallsClustersDb {
     set -o pipefail
 
     duckdb jrc_clusters.duckdb 'CREATE TABLE jrc_clusters (vid VARCHAR, member VARCHAR);'
-
-    while read -r f; do
-      duckdb jrc_clusters.duckdb "COPY jrc_clusters FROM '${f}' (FORMAT CSV, DELIMITER '\t', HEADER false);"
-    done < '~{write_lines(clusters)}'
+    gawk '$0 {print "COPY jrc_clusters FROM \047"$0"\047 (FORMAT CSV, DELIMITER \047\\t\047, HEADER false);"}' \
+      '~{write_lines(clusters)}' \
+      | duckdb jrc_clusters.duckdb
   >>>
 
   output {
