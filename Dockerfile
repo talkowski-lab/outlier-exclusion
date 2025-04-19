@@ -10,8 +10,10 @@ ARG HTSLIB_URI="https://github.com/samtools/htslib/releases/download/${HTSLIB_VE
 ENV PIP_ROOT_USER_ACTION=ignore
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gawk \
-    && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends \
+    gawk \
+    zstd \
+  && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir "duckdb==${DUCKDB_VERSION}"
 
@@ -32,10 +34,10 @@ RUN curl -L -o htslib.tar.bz2 "${HTSLIB_URI}" \
   && tar -jxf htslib.tar.bz2 \
   && cd "htslib-${HTSLIB_VERSION}" \
   && ./configure --prefix=/usr/local \
-       --enable-libcurl \
-       --enable-gcs \
-       --enable-s3 \
-       --with-libdeflate \
+    --enable-libcurl \
+    --enable-gcs \
+    --enable-s3 \
+    --with-libdeflate \
   && make \
   && make install \
   && cd .. \

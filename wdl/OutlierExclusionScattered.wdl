@@ -7,7 +7,7 @@ workflow OutlierExclusionScattered {
     # Split by contig VCFs
     Array[File] join_raw_calls_vcfs
 
-    Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 250000], ["DUP", 5000, 25000]]
+    Array[Array[String]] svtypes_to_filter = [["DEL", 5000, 25000], ["DUP", 5000, 25000]]
 
     File? wgd_scores
     Float? min_wgd_score
@@ -41,14 +41,14 @@ workflow OutlierExclusionScattered {
     call oe.GetJoinRawCallsClusters {
       input:
         vcf_or_bcf = vcf,
-        runtime_docker = base_docker
+        base_docker = base_docker
     }
 
     if (!defined(outlier_samples)) {
       call oe.ConvertVcfOrBcfToTsv {
         input:
           vcf_or_bcf = vcf,
-          runtime_docker = base_docker
+          base_docker = base_docker
       }
     }
   }
@@ -56,7 +56,7 @@ workflow OutlierExclusionScattered {
   call oe.MakeJoinRawCallsClustersDb {
     input:
       clusters = GetJoinRawCallsClusters.clusters,
-      runtime_docker = base_docker
+      base_docker = base_docker
   }
 
   if (defined(ConvertVcfOrBcfToTsv.tsv)) {
@@ -64,7 +64,7 @@ workflow OutlierExclusionScattered {
       input:
         tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
         filters = svtypes_to_filter,
-        runtime_docker = pipeline_docker
+        pipeline_docker = pipeline_docker
     }
 
     call oe.DetermineOutlierSamples {
@@ -74,7 +74,7 @@ workflow OutlierExclusionScattered {
         min_wgd_score = min_wgd_score,
         max_wgd_score = max_wgd_score,
         iqr_multiplier = iqr_multiplier,
-        runtime_docker = pipeline_docker
+        pipeline_docker = pipeline_docker
     }
   }
 
@@ -82,7 +82,7 @@ workflow OutlierExclusionScattered {
     call oe.FormatOutlierSamples {
       input:
         outlier_samples = select_first([outlier_samples]),
-        runtime_docker = base_docker
+        base_docker = base_docker
     }
   }
 
@@ -100,7 +100,7 @@ workflow OutlierExclusionScattered {
         outlier_samples_db = outlier_samples_db,
         min_outlier_sample_prop = min_outlier_sample_prop,
         jrc_clusters_db = MakeJoinRawCallsClustersDb.jrc_clusters_db,
-        runtime_docker = pipeline_docker
+        pipeline_docker = pipeline_docker
     }
   }
 
@@ -113,7 +113,7 @@ workflow OutlierExclusionScattered {
         output_prefix = if defined(prefix_list) then select_first([prefix_list])[i] else static_prefix,
         filter_genotypes_vcf = filter_genotypes_vcfs[i],
         outlier_variants = DetermineOutlierVariants.outlier_variants,
-        runtime_docker = pipeline_docker
+        pipeline_docker = pipeline_docker
     }
   }
 
