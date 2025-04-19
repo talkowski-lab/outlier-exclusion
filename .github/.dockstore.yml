@@ -9,8 +9,6 @@ workflows:
         - main
       tags:
         - /.*/
-
-workflows:
   - name: OutlierExclusionScattered
     subclass: WDL
     primaryDescriptorPath: /wdl/OutlierExclusionScattered.wdl
