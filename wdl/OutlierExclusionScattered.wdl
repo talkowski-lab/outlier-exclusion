@@ -59,7 +59,7 @@ workflow OutlierExclusionScattered {
       base_docker = base_docker
   }
 
-  if (defined(ConvertVcfOrBcfToTsv.tsv)) {
+  if (!defined(outlier_samples)) {
     call oe.MakeSvCountsDb {
       input:
         tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
