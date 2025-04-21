@@ -329,15 +329,15 @@ task MakeJoinRawCallsClustersDb {
     String base_docker
   }
 
-  Int disk_size_gb = ceil(size(clusters, "GB")) + 16
+  Int disk_size_gb = ceil(size(clusters, "GB") * 2) + 16
 
   runtime {
     bootDiskSizeGb: 8
-    cpus: 1
-    disks: "local-disk ${disk_size_gb} HDD"
+    cpus: 2
+    disks: "local-disk ${disk_size_gb} SSD"
     docker: base_docker
     maxRetries: 1
-    memory: "1 GiB"
+    memory: "4 GiB"
     preemptible: 3
   }
 
