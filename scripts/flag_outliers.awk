@@ -45,22 +45,16 @@ ARGIND == 1 {
 	for (i = 1; i <= ncontigs; ++i) {
 		print contigs[i]
 	}
-	# Print the CHROM line
 	print $0
 	next
 }
 
-# The TRUTH_VID value in the FilterGenotypes VCF corresponds to the variant ID
-# in the JoinRawCalls VCF.
 $8 ~ /TRUTH_VID=/ {
 	match($8, /TRUTH_VID=([^;]+);?/, a)
 	if (RSTART && a[1] && (a[1] in variants)) {
 		if ($7 == "PASS" || $7 == ".") {
 			$7 = "OUTLIER"
 		} else if ($7 !~ /(^OUTLIER$)|(^OUTLIER;)|(;OUTLIER;)|(;OUTLIER$)/) {
-			# Check for the flag first to avoid adding a duplicate.
-			# These cases are needed to ensure the flag is not a
-			# substring of another flag.
 			$7 = $7 ";OUTLIER"
 		}
 	}
