@@ -1,4 +1,4 @@
-"""Count SVs per sample in a DuckDB database
+"""Count SVs per sample
 
 usage: python count_svs.py <counts_db> <sv_db>
 
