@@ -66,23 +66,28 @@ workflow OutlierExclusion {
     }
   }
 
-  call MakeJoinRawCallsClustersDb {
-    input:
-      clusters = GetJoinRawCallsClusters.clusters,
-      base_docker = base_docker
+  call GatherSVs {
+      input:
+          sv_tsvs=select_all(ConvertVcfOrBcfToTsv.tsv)
+  }
+  
+  call GatherClusters {
+      input:
+          cluster_tsvs=GetJoinRawCallsClusters.clusters
   }
 
   if (!defined(outlier_samples)) {
-    call MakeSvCountsDb {
+    call CountSVs {
       input:
-        tsvs = select_all(ConvertVcfOrBcfToTsv.tsv),
+        svs_tsv = GatherSVs.out,
         filters = svtypes_to_filter,
         pipeline_docker = pipeline_docker
     }
 
     call DetermineOutlierSamples {
       input:
-        sv_counts_db = MakeSvCountsDb.sv_counts_db,
+        sv_counts_tsv = CountSVs.sv_counts_tsv,
+        sv_filters_tsv = CountSVs.sv_filters_tsv,
         wgd_scores = wgd_scores,
         min_wgd_score = min_wgd_score,
         max_wgd_score = max_wgd_score,
@@ -91,15 +96,8 @@ workflow OutlierExclusion {
     }
   }
 
-  if (defined(outlier_samples)) {
-    call FormatOutlierSamples {
-      input:
-        outlier_samples = select_first([outlier_samples]),
-        base_docker = base_docker
-    }
-  }
-
-  File outlier_samples_db = select_first([FormatOutlierSamples.db, DetermineOutlierSamples.sv_counts_db_with_outliers])
+  File outlier_samples_list = select_first([outlier_samples, DetermineOutlierSamples.sv_count_outlier_samples])
+  
   Array[Array[File]] clustered_vcfs = select_all([clustered_depth_vcfs,
     clustered_manta_vcfs,
     clustered_wham_vcfs,
@@ -107,15 +105,21 @@ workflow OutlierExclusion {
     clustered_scramble_vcfs])
 
   scatter (batch_vcfs in transpose(clustered_vcfs)) {
-    call DetermineOutlierVariants {
-      input:
-        clustered_vcfs = batch_vcfs,
-        outlier_samples_db = outlier_samples_db,
-        min_outlier_sample_prop = min_outlier_sample_prop,
-        jrc_clusters_db = MakeJoinRawCallsClustersDb.jrc_clusters_db,
-        pipeline_docker = pipeline_docker
-    }
+      call ConvertBatchToTsv {
+          input:
+              vcfs=batch_vcfs
+      }
+      
+      call DetermineOutlierVariants {
+          input:
+              variants_tsv = ConvertBatchToTsv.tsv,
+              outlier_samples_tsv = outlier_samples_list,
+              jrc_clusters_tsv = GatherClusters.out,
+              min_outlier_sample_prop = min_outlier_sample_prop,
+              pipeline_docker = pipeline_docker
+      }
   }
+  
 
   call FlagOutlierVariants {
     input:
@@ -128,7 +132,7 @@ workflow OutlierExclusion {
   output {
     File outlier_annotated_vcf = FlagOutlierVariants.outlier_annotated_vcf
     File outlier_annotated_vcf_index = FlagOutlierVariants.outlier_annotated_vcf_index
-    File? sv_count_outlier_samples = DetermineOutlierSamples.outlier_samples
+    File? sv_count_outlier_samples = DetermineOutlierSamples.sv_count_outlier_samples
     File? wgd_outlier_samples = DetermineOutlierSamples.wgd_outlier_samples
   }
 }
@@ -311,84 +315,39 @@ task GetJoinRawCallsClusters {
   }
 }
 
-#=======================================================================
-# Load SV clusters from JoinRawCalls into a DuckDB database.
-#
-# Inputs
-# ------
-# clusters: TSV files as produced by GetJoinRawCallsClusters.
-# base_docker: Path to Docker image.
-#
-# Outputs
-# -------
-# jrc_clusters_db: DuckDB database with clusters loaded into a table
-#   named 'jrc_clusters'.
-#=======================================================================
-task MakeJoinRawCallsClustersDb {
-  input {
-    Array[File] clusters
-    String base_docker
-  }
-
-  Int disk_size_gb = ceil(size(clusters, "GB") * 2) + 16
-
-  runtime {
-    bootDiskSizeGb: 8
-    cpus: 2
-    disks: "local-disk ${disk_size_gb} SSD"
-    docker: base_docker
-    maxRetries: 1
-    memory: "4 GiB"
-    preemptible: 3
-  }
-
-  command <<<
-    set -o errexit
-    set -o nounset
-    set -o pipefail
-
-    duckdb jrc_clusters.duckdb 'CREATE TABLE jrc_clusters (vid VARCHAR, member VARCHAR);'
-    gawk '$0 {print "COPY jrc_clusters FROM \047"$0"\047 (FORMAT CSV, DELIMITER \047\\t\047, HEADER false);"}' \
-      '~{write_lines(clusters)}' \
-      | duckdb jrc_clusters.duckdb
-  >>>
-
-  output {
-    File jrc_clusters_db = "jrc_clusters.duckdb"
-  }
+task GatherSVs {
+    input {
+        Array[File] sv_tsvs
+    }
+    command <<<
+        zstdcat ~{sep=' ' sv_tsvs} > all_svs.tsv
+    >>>
+    output {
+        File out = "all_svs.tsv"
+    }
 }
 
-#=======================================================================
-# Count the number of SVs per sample for the given filters.
-#
-# Inputs
-# ------
-# tsvs: TSV files as output by ConvertVcfOrBcfToTsv.
-# filters: Filters for counting SVs. Each filter is a three-element
-#   Array of the form `[SVTYPE, MIN_SVLEN, MAX_SVLEN]` and the SV counts
-#   per sample will be computed for each filter. Note that the filters
-#   are not checked for overlap so if there is overlap between two
-#   filters, a variant could be counted twice. On Terra, all elements of
-#   the filters may have to given as Strings because type coercion may
-#   not work. Negative and positive infinity may be expressed using
-#   "-Inf" and "Inf", respectively.
-# pipeline_docker: Path to Docker image.
-#
-#
-# Outputs
-# -------
-# sv_counts_db: DuckDB database with counts of SVs per sample. There
-#   will be one table for the filters and one table of counts per
-#   filter.
-#=======================================================================
-task MakeSvCountsDb {
+task GatherClusters {
+    input {
+        Array[File] cluster_tsvs
+    }
+    command <<<
+        zstdcat ~{sep=' ' cluster_tsvs} > all_clusters.tsv
+    >>>
+    output {
+        File out = "all_clusters.tsv"
+    }
+}
+
+
+task CountSVs {
   input {
-    Array[File] tsvs
+    File svs_tsv
     Array[Array[String]] filters
     String pipeline_docker
   }
 
-  Int disk_size_gb = ceil(size(tsvs, "GB") * 2) + 16
+  Int disk_size_gb = ceil(size(svs_tsv, "GB") * 2) + 16
 
   runtime {
     bootDiskSizeGb: 8
@@ -404,90 +363,23 @@ task MakeSvCountsDb {
     set -o errexit
     set -o nounset
     set -o pipefail
-
-    duckdb svs.duckdb << 'EOF'
-    CREATE TABLE svs (
-        vid VARCHAR,
-        svtype VARCHAR,
-        svlen INTEGER,
-        sample VARCHAR
-    );
-    EOF
-    gawk '{print "COPY svs FROM \047"$0"\047 (FORMAT CSV, DELIMITER \047\\t\047, HEADER false);"}' \
-      '~{write_lines(tsvs)}' \
-      | duckdb svs.duckdb
-
-    duckdb sv_counts.duckdb << 'EOF'
-    CREATE TABLE sv_filters (
-        svtype VARCHAR,
-        min_svlen DOUBLE,
-        max_svlen DOUBLE
-    );
-    COPY sv_filters
-    FROM '~{write_tsv(filters)}' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
-    CREATE SEQUENCE id_sequence START 1;
-    ALTER TABLE sv_filters ADD COLUMN id INTEGER DEFAULT nextval('id_sequence');
-
-    UPDATE sv_filters
-    SET min_svlen = trunc(min_svlen)
-    WHERE isfinite(min_svlen);
-    UPDATE sv_filters
-    SET max_svlen = trunc(max_svlen)
-    WHERE isfinite(max_svlen);
-    EOF
-
-    python3 '/opt/outlier-exclusion/scripts/count_svs.py' sv_counts.duckdb svs.duckdb
+    
+    python3 '/opt/outlier-exclusion/scripts/count_svs.py' \
+        '~{svs_tsv}' \
+        '~{write_tsv(filters)}' \
+        sv_counts.tsv
   >>>
 
   output {
-    File sv_counts_db = "sv_counts.duckdb"
+    File sv_counts_tsv = "sv_counts.tsv"
+    File sv_filters_tsv = "~{write_tsv(filters)}"
   }
 }
 
-#=======================================================================
-# Find outlier samples based on SV counts and optionally WGD scores.
-#
-# Finding outlier samples based on SV counts is done by first computing
-# the interquartile range (IQR) of SVs per sample. Then the IQR is
-# multiplied by a scaling factor to determine the upper limit of SVs per
-# sample. Any sample with more SVs than the limit is marked as an
-# outlier. Thresholds and outliers are determined independently for each
-# counts filter.
-#
-# Finding outlier samples based on WGD scores is done with simple
-# thresholding. Any sample with a score less than the specified
-# minimum or greater than the specified maximum is an outlier.
-#
-# Inputs
-# ------
-# sv_counts_db: DuckDB database with counts of SVs per sample.
-# wgd_scores: Two-column TSV file of WGD scores.
-#   1. Sample ID
-#   2. WGS score
-# min_wgd_score: Minimum WGD score. Samples with scores less than this
-#   are outliers.
-# max_wgd_score: Maximum WGD score. Samples with scores greater than
-#   this are outliers.
-# iqr_multiplier: Scaling factor for IQR threshold. Samples with more
-#   then `iqr_multiplier * IQR(SVs per sample)` SVs are outliers.
-# pipeline_docker: Path to Docker image.
-#
-# Outputs
-# -------
-# sv_counts_db_with_outliers: DuckDB database with tables for outlier
-#   samples. The tables are added to `sv_counts_db`.
-# outlier_samples: TSV file listing all the outlier samples found by
-#   counting SVs per sample and their associated filters.
-# wgd_outlier_samples: TSV file listing all the outlier samples found
-#   by thresholding on WGD scores.
-#=======================================================================
 task DetermineOutlierSamples {
   input {
-    File sv_counts_db
+    File sv_counts_tsv
+    File sv_filters_tsv
     File? wgd_scores
     Float min_wgd_score = -0.2
     Float max_wgd_score = 0.2
@@ -496,7 +388,7 @@ task DetermineOutlierSamples {
     String pipeline_docker
   }
 
-  Float input_size = size([sv_counts_db, wgd_scores], "GB")
+  Float input_size = size([sv_counts_tsv, wgd_scores], "GB")
   Int disk_size_gb = ceil(input_size * 1.2) + 16
 
   runtime {
@@ -514,144 +406,52 @@ task DetermineOutlierSamples {
     set -o nounset
     set -o pipefail
 
-    mv '~{sv_counts_db}' sv_counts_with_outliers.duckdb
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_samples.py' \
-      sv_counts_with_outliers.duckdb \
+      '~{sv_counts_tsv}' \
+      '~{sv_filters_tsv}' \
+      sv_count_outlier_samples.tsv \
+      wgd_outlier_samples.tsv \
       '~{iqr_multiplier}' \
       ~{if defined(wgd_scores) then "--wgd-scores '" + wgd_scores + "'" else ""} \
       ~{if defined(wgd_scores) then "--min-wgd-score " + min_wgd_score else ""} \
       ~{if defined(wgd_scores) then "--max-wgd-score " + max_wgd_score else ""}
-
-    python3 '/opt/outlier-exclusion/scripts/dump_outlier_samples.py' \
-      sv_counts_with_outliers.duckdb \
-      wgd_outlier_samples.tsv \
-      dump
-
-    printf 'sample_id\tcount\tsvtype\tmin_svlen\tmax_svlen\n' > sv_count_outlier_samples.tsv
-    find dump -type f -name '*.tsv' -exec cat '{}' \; >> sv_count_outlier_samples.tsv
   >>>
 
   output {
-    File sv_counts_db_with_outliers = "sv_counts_with_outliers.duckdb"
-    File outlier_samples = "sv_count_outlier_samples.tsv"
+    File sv_count_outlier_samples = "sv_count_outlier_samples.tsv"
     File wgd_outlier_samples = "wgd_outlier_samples.tsv"
   }
 }
 
-#=======================================================================
-# Load a user-provided TSV file of outlier samples into a database.
-#
-# Inputs
-# ------
-# outlier_samples: A two-column TSV file of outlier samples.
-#   1. Sample ID
-#   2. SV type
-# base_docker: Path to Docker image.
-#
-# Outputs
-# -------
-# db: DuckDB database.
-#=======================================================================
-task FormatOutlierSamples {
-  input {
-    File outlier_samples
-    String base_docker
-  }
-
-  Int disk_size_gb = ceil(size(outlier_samples, "GB")) + 16
-
-  runtime {
-    bootDiskSizeGb: 8
-    cpus: 1
-    disks: "local-disk ${disk_size_gb} HDD"
-    docker: base_docker
-    maxRetries: 1
-    memory: "1 GiB"
-    preemptible: 3
-  }
-
-  command <<<
-    duckdb outlier_samples.duckdb << 'EOF'
-    CREATE TABLE outlier_samples (
-        sample VARCHAR,
-        svtype VARCHAR
-    );
-    COPY outlier_samples
-    FROM '~{outlier_samples}' (
-        FORMAT CSV,
-        DELIMITER '\t',
-        HEADER false
-    );
-    EOF
-  >>>
-
-  output {
-    File db = 'outlier_samples.duckdb'
-  }
+task ConvertBatchToTsv {
+    input {
+        Array[File] vcfs
+    }
+    command <<<
+    bcftools query --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
+      --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
+      --vcf-list '~{write_lines(vcfs)}' \
+        | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
+        | zstd -q -c > variants.tsv.zst
+    >>>
+    output {
+        File tsv = "variants.tsv.zst"
+    }
 }
 
-#=======================================================================
-# Find outlier enriched variants in the ClusterBatch VCFs.
-#
-# For each variant, the carrier samples (those with a "1" in GT) are
-# collected, the proprotion of carriers that are outlier samples is
-# computed, and then variants with a proportion of outlier samples
-# greater than the given threshold are labeled as outlier variants.
-#
-# Outlier samples are defined in different ways depending on the
-# workflow inputs. Outlier samples found by counting the number of SVs
-# per sample are only considered to be outliers for variants matching
-# their filter SV type. For example, if a sample was determined to be an
-# outlier from counting DELs in the range 5-25Kb, it would only count
-# as an outlier in DEL ClusterBatch variants.
-#
-# Outlier samples found from WGD scores are considered outlier samples
-# in all SV types. Outlier variants can only be found in this way if
-# WGD scores were provided in DetermineOutlierSamples.
-#
-# Outlier sample proportions using SV count outliers and WGD outliers
-# are computed independently, but the lists of outlier variants found
-# from each are merged into one.
-#
-# Outlier samples given as a custom input must have an accompanying SV
-# type and are matched in that way. If these are given as inputs, the
-# outlier samples from SV counts and WGD scores will not be used.
-#
-# All the outlier variants in the ClusterBatch VCFs are matched to
-# their JoinRawCalls IDs using the information from the JoinRawCalls
-# clusters.
-#
-# Inputs
-# ------
-# clustered_vcfs: The VCFs from GATK-SV ClusterBatch. When running the
-#   OutlierExclusion workflow, these VCFs will be all the raw algorithm
-#   VCFs for a single batch, but the task will accept VCFs from mixed
-#   batches.
-# outlier_samples_db: DuckDB database containing the outlier samples
-#   (output from DetermineOutlierSamples).
-# jrc_clusters_db: DuckDB database containing the JoinRawCalls clusters
-#   (output from MakeJoinRawCallsClustersDb).
-# min_outlier_sample_prop: Minimum proportion of outlier samples a
-#   variant must have to be considered an outlier.
-# pipeline_docker: Path to Docker image.
-#
-# Outputs
-# -------
-# outlier_variants: List of IDs of the outlier variants. These IDs are
-#   the ones in the JoinRawCalls VCF.
-#=======================================================================
+
 task DetermineOutlierVariants {
   input {
-    Array[File] clustered_vcfs
-    File outlier_samples_db
-    File jrc_clusters_db
+    File variants_tsv
+    File outlier_samples_tsv
+    File jrc_clusters_tsv
     Float min_outlier_sample_prop
 
     String pipeline_docker
   }
 
 
-  Float input_size = size(clustered_vcfs, "GB") + size(jrc_clusters_db, "GB") + size(outlier_samples_db, "GB")
+  Float input_size = size(variants_tsv, "GB") + size(jrc_clusters_tsv, "GB") + size(outlier_samples_tsv, "GB")
   Int disk_size_gb = ceil(input_size) + 16
 
   runtime {
@@ -669,18 +469,10 @@ task DetermineOutlierVariants {
     set -o nounset
     set -o pipefail
 
-    bcftools query --include 'GT ~ "1" & INFO/SVTYPE != "BND"' \
-      --format '[%ID\t%ALT{0}\t%INFO/SVLEN\t%SAMPLE\n]' \
-      --vcf-list '~{write_lines(clustered_vcfs)}' \
-        | awk -F'\t' '{sub(/^</, "", $2); sub(/>$/, "", $2); print}' OFS='\t' \
-        | zstd -q -c > variants.tsv.zst
-    duckdb variants.duckdb 'CREATE TABLE variants (vid VARCHAR, svtype VARCHAR, svlen INTEGER, sample VARCHAR);'
-    duckdb variants.duckdb "COPY variants FROM 'variants.tsv.zst' (HEADER false, DELIMITER '\t');"
-
     python3 '/opt/outlier-exclusion/scripts/determine_outlier_variants.py' \
-      '~{outlier_samples_db}' \
-      '~{jrc_clusters_db}' \
-      variants.duckdb \
+      '~{variants_tsv}' \
+      '~{jrc_clusters_tsv}' \
+      '~{outlier_samples_tsv}' \
       outlier_variants.list \
       '~{min_outlier_sample_prop}'
   >>>

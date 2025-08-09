@@ -1,4 +1,4 @@
-"""Count SVs per sample in a DuckDB database
+"""Count SVs per sample
 
 usage: python count_svs.py <counts_db> <sv_db>
 
@@ -40,66 +40,76 @@ import argparse
 from pathlib import Path
 from collections.abc import Sequence
 
-import duckdb
+import pandas as pd
 
 
-def validate_filters(con: duckdb.DuckDBPyConnection):
-    sql = "SELECT svtype, min_svlen, max_svlen FROM sv_filters;"
-    filters = con.sql(sql).fetchall()
-    for f in filters:
-        if f[1] < 0:
-            raise ValueError("Min SV length must be >= 0")
-        if f[1] > f[2]:
-            raise ValueError("Min SV length must be <= max SV length")
+def validate_filters(filters: pd.DataFrame):
+    if (filters["min_svlen"] < 0).any():
+        raise ValueError("Min SV length must be >= 0")
+    if (filters["min_svlen"] > filters["max_svlen"]).any():
+        raise ValueError("Min SV length must be <= max SV length")
 
 
-def count_svs(con: duckdb.DuckDBPyConnection, filter_id: int):
-    sql = """SELECT svtype, min_svlen, max_svlen
-    FROM sv_filters
-    WHERE id = ?;
-    """
-    filters = con.execute(sql, [filter_id]).fetchall()
-    sql = (
-        f"CREATE OR REPLACE TABLE sv_counts_{filter_id}"
-        " AS SELECT sample, COUNT(*) AS count"
-        " FROM sv_db.svs"
-        " WHERE svtype = ? AND svlen >= ? AND svlen <= ?"
-        " GROUP BY sample"
-    )
-
-    con.execute(sql, list(filters[0]))
-
-
-def make_tables(counts_db: Path, sv_db: Path):
-    with duckdb.connect(counts_db) as con:
-        validate_filters(con)
-        con.sql(f"ATTACH '{sv_db}' AS sv_db;")
-        filter_ids = con.sql("SELECT id FROM sv_filters;").fetchall()
-        for i in filter_ids:
-            count_svs(con, i[0])
+def count_svs(svs: pd.DataFrame, filters: pd.DataFrame) -> pd.DataFrame:
+    """Count SVs per sample for each filter."""
+    all_counts = []
+    for _, row in filters.iterrows():
+        filtered_svs = svs[
+            (svs["svtype"] == row["svtype"])
+            & (svs["svlen"] >= row["min_svlen"])
+            & (svs["svlen"] <= row["max_svlen"])
+        ]
+        if filtered_svs.empty:
+            continue
+        counts = filtered_svs.groupby("sample").size().reset_index(name="count")
+        counts = counts.assign(
+            svtype=row["svtype"],
+            min_svlen=row["min_svlen"],
+            max_svlen=row["max_svlen"],
+        )
+        all_counts.append(counts)
+    if not all_counts:
+        return pd.DataFrame(
+            columns=["sample", "count", "svtype", "min_svlen", "max_svlen"]
+        )
+    return pd.concat(all_counts, ignore_index=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Count SVs per sample")
     parser.add_argument(
-        "counts_db",
-        metavar="COUNTS_DB",
+        "svs_tsv",
+        metavar="SVS_TSV",
         type=Path,
-        help="Path to the SV counts DuckDB database",
+        help="Path to the SVs TSV file",
     )
     parser.add_argument(
-        "sv_db", metavar="SV_DB", type=Path, help="Path to the SV DuckDB database"
+        "filters_tsv",
+        metavar="FILTERS_TSV",
+        type=Path,
+        help="Path to the filters TSV file",
+    )
+    parser.add_argument(
+        "output_tsv",
+        metavar="OUTPUT_TSV",
+        type=Path,
+        help="Path to the output TSV file",
     )
     args = parser.parse_args(argv)
 
     retval = 0
 
-    if not args.counts_db.is_file():
-        raise FileNotFoundError("Counts database must exist")
-    if not args.sv_db.is_file():
-        raise FileNotFoundError("SV database must exist")
+    if not args.svs_tsv.is_file():
+        raise FileNotFoundError("SVs TSV file must exist")
+    if not args.filters_tsv.is_file():
+        raise FileNotFoundError("Filters TSV file must exist")
 
-    make_tables(args.counts_db, args.sv_db)
+    svs = pd.read_csv(args.svs_tsv, sep="\t")
+    filters = pd.read_csv(args.filters_tsv, sep="\t")
+
+    validate_filters(filters)
+    counts_df = count_svs(svs, filters)
+    counts_df.to_csv(args.output_tsv, sep="\t", index=False)
 
     return retval
 
