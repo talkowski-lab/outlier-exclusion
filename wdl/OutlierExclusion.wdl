@@ -467,7 +467,7 @@ task MakeSvCountsDb {
 # sv_counts_db: DuckDB database with counts of SVs per sample.
 # wgd_scores: Two-column TSV file of WGD scores.
 #   1. Sample ID
-#   2. WGS score
+#   2. WGD score
 # min_wgd_score: Minimum WGD score. Samples with scores less than this
 #   are outliers.
 # max_wgd_score: Maximum WGD score. Samples with scores greater than
@@ -519,8 +519,8 @@ task DetermineOutlierSamples {
       sv_counts_with_outliers.duckdb \
       '~{iqr_multiplier}' \
       ~{if defined(wgd_scores) then "--wgd-scores '" + wgd_scores + "'" else ""} \
-      ~{if defined(wgd_scores) then "--min-wgd-score " + min_wgd_score else ""} \
-      ~{if defined(wgd_scores) then "--max-wgd-score " + max_wgd_score else ""}
+      ~{if defined(wgd_scores) then "--min-wgd" + min_wgd_score else ""} \
+      ~{if defined(wgd_scores) then "--max-wgd" + max_wgd_score else ""}
 
     python3 '/opt/outlier-exclusion/scripts/dump_outlier_samples.py' \
       sv_counts_with_outliers.duckdb \
